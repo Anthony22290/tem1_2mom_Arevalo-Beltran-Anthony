@@ -1,0 +1,23 @@
+# Levanta Apache Hive 4 (HiveServer2 con metastore Derby embebido)
+# con el repositorio montado en /opt/proyecto.
+#
+# Uso:
+#   docker compose up -d
+#   docker compose exec hive bash scripts/ejecutar_todo_docker.sh
+#
+# Interfaz web de HiveServer2: http://localhost:10002
+services:
+  hive:
+    image: apache/hive:4.0.1
+    container_name: hive_superstore
+    environment:
+      SERVICE_NAME: hiveserver2
+      TZ: UTC
+    # HiveServer2 arranca dentro de la carpeta del proyecto para que las
+    # rutas relativas de LOAD DATA LOCAL INPATH (csv/preparado/...) funcionen
+    working_dir: /opt/proyecto
+    volumes:
+      - ./:/opt/proyecto
+    ports:
+      - "10000:10000"
+      - "10002:10002"

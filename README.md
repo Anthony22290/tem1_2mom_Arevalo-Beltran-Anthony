@@ -18,7 +18,8 @@ En este proyecto trabajo con los datos de ventas de una tienda de EE. UU. (9 994
 
 | Componente | Versión usada | Uso |
 |------------|---------------|-----|
-| Apache Hive / HiveServer2 + Beeline | 3.x | Ejecución de los scripts `.sql` en un clúster |
+| Docker Desktop | – | Levantar Hive 4.0.1 sin instalar nada más (opción recomendada) |
+| Apache Hive / HiveServer2 + Beeline | 4.0.1 | Ejecución de los scripts `.sql` |
 | Java | 17 o superior | Requerido por Hive / Spark |
 | Python + PySpark | 3.12 / 3.5.3 | Ejecución local con metastore Hive (`scripts/ejecutar_hiveql.py`), generó las evidencias |
 | `iconv`, `sed` | – | Preparación del CSV (`scripts/preparar_datos.sh`) |
@@ -32,13 +33,47 @@ csv/
   preparado/                       archivos en UTF-8 listos para LOAD DATA
 scripts/
   preparar_datos.sh                Windows-1252 -> UTF-8, CRLF -> LF
-  ejecutar_hiveql.py               ejecuta un .sql y guarda la evidencia
+  ejecutar_hiveql.py               ejecuta un .sql con Spark y guarda la evidencia
+  ejecutar_todo_docker.sh          ejecuta todos los .sql en Hive (Docker)
+docker-compose.yml                 contenedor de Apache Hive 4.0.1
 sql/                               scripts HiveQL (DDL, DML y una consulta por pregunta)
 docs/                              diccionario de datos y documentación de cada pregunta
 evidencias/                        salida de la ejecución de cada script
 ```
 
-## Procedimiento de ejecución
+## Cómo ejecutarlo con Docker (recomendado)
+
+Solo se necesita tener instalado [Docker Desktop](https://www.docker.com/products/docker-desktop/). No hace falta instalar Hive ni Java.
+
+```bash
+# 1. Descargar el repositorio
+git clone https://github.com/Anthony22290/tem1_2mom_Arevalo_Anthony.git
+cd tem1_2mom_Arevalo_Anthony
+
+# 2. Levantar Hive (la primera vez descarga la imagen, tarda unos minutos)
+docker compose up -d
+
+# 3. Ejecutar todas las preguntas en orden
+docker compose exec hive bash scripts/ejecutar_todo_docker.sh
+
+# 4. Apagar Hive al terminar
+docker compose down
+```
+
+El paso 3 espera a que Hive termine de arrancar, ejecuta los scripts de `sql/` uno por uno y guarda la salida de cada uno en `evidencias/hive/`.
+
+También se pueden hacer consultas a mano entrando a Beeline:
+
+```bash
+docker compose exec hive beeline -u jdbc:hive2://localhost:10000/
+# luego, por ejemplo:
+# USE superstore_db;
+# SELECT region, SUM(sales) FROM superstore GROUP BY region;
+```
+
+Los archivos de `csv/preparado/` ya están en el repositorio, así que no es necesario correr `scripts/preparar_datos.sh`.
+
+## Procedimiento de ejecución (sin Docker)
 
 Desde la raíz del repositorio:
 

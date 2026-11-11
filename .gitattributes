@@ -1,0 +1,6 @@
+# Los scripts .sh siempre con fin de linea Unix (para que funcionen en Docker
+# aunque el repositorio se clone en Windows)
+*.sh text eol=lf
+# Los CSV no se modifican al clonar (si Git les agrega \r en Windows,
+# la ultima columna queda con un caracter extra y la carga falla)
+*.csv -text
