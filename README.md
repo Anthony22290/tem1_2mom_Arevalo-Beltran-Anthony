@@ -1,4 +1,4 @@
-# tem1_2mom_Arevalo_Anthony
+# tem1_2mom_Arevalo-Beltran-Anthony
 
 Examen práctico individual – 2do momento (Universidad del Valle).
 Procesamiento y análisis del dataset **Sample Superstore** con **Apache Hive (HiveQL)**.
@@ -47,8 +47,8 @@ Solo se necesita tener instalado [Docker Desktop](https://www.docker.com/product
 
 ```bash
 # 1. Descargar el repositorio
-git clone https://github.com/Anthony22290/tem1_2mom_Arevalo_Anthony.git
-cd tem1_2mom_Arevalo_Anthony
+git clone https://github.com/Anthony22290/tem1_2mom_Arevalo-Beltran-Anthony.git
+cd tem1_2mom_Arevalo-Beltran-Anthony
 
 # 2. Levantar Hive (la primera vez descarga la imagen, tarda unos minutos)
 docker compose up -d
@@ -131,3 +131,4 @@ Diccionario completo: [`docs/diccionario_datos.md`](docs/diccionario_datos.md)
 ## Uso de herramientas
 
 Para el desarrollo se usó un asistente de IA (Claude) como apoyo, según la política del docente. El código y los análisis fueron revisados por el estudiante.
+
