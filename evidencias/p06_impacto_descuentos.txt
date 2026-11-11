@@ -1,0 +1,229 @@
+EVIDENCIA DE EJECUCION
+Script : sql/p06_impacto_descuentos.sql
+Motor  : Spark SQL 3.5.3 con soporte Hive (HiveQL)
+Fecha  : 2026-11-11 11:24:31
+====================================================================================================
+
+-- [1] -- =====================================================================
+-- PREGUNTA 6 - Analisis del impacto de los descuentos
+-- Rangos: Sin descuento (0) | Bajo (0, 20%] | Medio (20%, 50%] | Alto (> 50%)
+-- Registro con perdida  : profit < 0
+-- Registro no rentable  : profit <= 0 (no genera ganancia)
+-- =====================================================================
+
+USE superstore_db
+OK - 0 fila(s) - 3.83 s
+
+-- [2] -- Vista con el rango asignado a cada linea (se reutiliza en todo el script)
+CREATE OR REPLACE VIEW superstore_rango_desc AS
+SELECT s.*,
+       CASE WHEN discount = 0    THEN '1 Sin descuento'
+            WHEN discount <= 0.20 THEN '2 Bajo (0-20%]'
+            WHEN discount <= 0.50 THEN '3 Medio (20-50%]'
+            ELSE                      '4 Alto (>50%)'
+       END AS rango_descuento
+FROM superstore s
+OK - 0 fila(s) - 1.00 s
+
+-- [3] -- ---------------------------------------------------------------------
+-- 6.1 Indicadores por rango de descuento
+-- ---------------------------------------------------------------------
+SELECT rango_descuento,
+       COUNT(*)                                                    AS registros,
+       ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2)          AS pct_registros,
+       ROUND(SUM(sales), 2)                                        AS ventas,
+       ROUND(SUM(profit), 2)                                       AS ganancia,
+       ROUND(SUM(profit) / SUM(sales) * 100, 2)                    AS margen_pct,
+       SUM(IF(profit < 0, 1, 0))                                   AS registros_con_perdida,
+       SUM(IF(profit <= 0, 1, 0))                                  AS registros_no_rentables,
+       ROUND(SUM(IF(profit <= 0, 1, 0)) * 100.0 / COUNT(*), 2)     AS pct_no_rentables,
+       ROUND(AVG(discount) * 100, 2)                               AS descuento_prom_pct,
+       ROUND(SUM(IF(profit < 0, profit, 0)), 2)                    AS monto_perdidas
+FROM superstore_rango_desc
+GROUP BY rango_descuento
+ORDER BY rango_descuento
++------------------+-----------+---------------+------------+-----------+------------+-----------------------+------------------------+------------------+--------------------+----------------+
+| rango_descuento  | registros | pct_registros | ventas     | ganancia  | margen_pct | registros_con_perdida | registros_no_rentables | pct_no_rentables | descuento_prom_pct | monto_perdidas |
++------------------+-----------+---------------+------------+-----------+------------+-----------------------+------------------------+------------------+--------------------+----------------+
+| 1 Sin descuento  | 4798      | 48.01         | 1087908.47 | 320987.60 | 29.51      | 0                     | 30                     | 0.63             | 0.00               | 0.00           |
+| 2 Bajo (0-20%]   | 3803      | 38.05         | 846522.24  | 100785.47 | 11.91      | 523                   | 545                    | 14.33            | 19.68              | -17616.04      |
+| 3 Medio (20-50%] | 537       | 5.37          | 298541.41  | -58817.00 | -19.70     | 492                   | 505                    | 94.04            | 36.70              | -61956.19      |
+| 4 Alto (>50%)    | 856       | 8.57          | 64228.74   | -76559.05 | -119.20    | 856                   | 856                    | 100.00           | 71.89              | -76559.05      |
++------------------+-----------+---------------+------------+-----------+------------+-----------------------+------------------------+------------------+--------------------+----------------+
+OK - 4 fila(s) - 3.62 s
+
+-- [4] -- ---------------------------------------------------------------------
+-- 6.2 Detalle por cada nivel de descuento (curva descuento vs perdida)
+-- ---------------------------------------------------------------------
+SELECT discount,
+       rango_descuento,
+       COUNT(*)                                                AS registros,
+       ROUND(SUM(sales), 2)                                    AS ventas,
+       ROUND(SUM(profit), 2)                                   AS ganancia,
+       ROUND(SUM(profit) / SUM(sales) * 100, 2)                AS margen_pct,
+       ROUND(SUM(IF(profit <= 0, 1, 0)) * 100.0 / COUNT(*), 2) AS pct_no_rentables
+FROM superstore_rango_desc
+GROUP BY discount, rango_descuento
+ORDER BY discount
++----------+------------------+-----------+------------+-----------+------------+------------------+
+| discount | rango_descuento  | registros | ventas     | ganancia  | margen_pct | pct_no_rentables |
++----------+------------------+-----------+------------+-----------+------------+------------------+
+| 0.00     | 1 Sin descuento  | 4798      | 1087908.47 | 320987.60 | 29.51      | 0.63             |
+| 0.10     | 2 Bajo (0-20%]   | 94        | 54369.35   | 9029.18   | 16.61      | 4.26             |
+| 0.15     | 2 Bajo (0-20%]   | 52        | 27558.52   | 1418.99   | 5.15       | 32.69            |
+| 0.20     | 2 Bajo (0-20%]   | 3657      | 764594.37  | 90337.31  | 11.82      | 14.33            |
+| 0.30     | 3 Medio (20-50%] | 227       | 103226.66  | -10369.28 | -10.05     | 97.36            |
+| 0.32     | 3 Medio (20-50%] | 27        | 14493.46   | -2391.14  | -16.50     | 100.00           |
+| 0.40     | 3 Medio (20-50%] | 206       | 116417.78  | -23057.05 | -19.81     | 87.38            |
+| 0.45     | 3 Medio (20-50%] | 11        | 5484.97    | -2493.11  | -45.45     | 100.00           |
+| 0.50     | 3 Medio (20-50%] | 66        | 58918.54   | -20506.43 | -34.80     | 100.00           |
+| 0.60     | 4 Alto (>50%)    | 138       | 6644.70    | -5944.66  | -89.46     | 100.00           |
+| 0.70     | 4 Alto (>50%)    | 418       | 40620.28   | -40075.36 | -98.66     | 100.00           |
+| 0.80     | 4 Alto (>50%)    | 300       | 16963.76   | -30539.04 | -180.03    | 100.00           |
++----------+------------------+-----------+------------+-----------+------------+------------------+
+OK - 12 fila(s) - 1.10 s
+
+-- [5] -- ---------------------------------------------------------------------
+-- 6.3 Categorias mas afectadas: perdidas y % no rentable por rango
+-- ---------------------------------------------------------------------
+SELECT category,
+       rango_descuento,
+       COUNT(*)                                                AS registros,
+       ROUND(SUM(sales), 2)                                    AS ventas,
+       ROUND(SUM(profit), 2)                                   AS ganancia,
+       ROUND(SUM(profit) / SUM(sales) * 100, 2)                AS margen_pct,
+       ROUND(SUM(IF(profit <= 0, 1, 0)) * 100.0 / COUNT(*), 2) AS pct_no_rentables
+FROM superstore_rango_desc
+GROUP BY category, rango_descuento
+ORDER BY category, rango_descuento
++-----------------+------------------+-----------+-----------+-----------+------------+------------------+
+| category        | rango_descuento  | registros | ventas    | ganancia  | margen_pct | pct_no_rentables |
++-----------------+------------------+-----------+-----------+-----------+------------+------------------+
+| Furniture       | 1 Sin descuento  | 836       | 256025.27 | 58133.08  | 22.71      | 0.00             |
+| Furniture       | 2 Bajo (0-20%]   | 743       | 290823.78 | 14795.95  | 5.09       | 27.86            |
+| Furniture       | 3 Medio (20-50%] | 389       | 186046.66 | -44638.16 | -23.99     | 99.49            |
+| Furniture       | 4 Alto (>50%)    | 153       | 9104.08   | -9839.59  | -108.08    | 100.00           |
+| Office Supplies | 1 Sin descuento  | 3129      | 442150.00 | 130506.11 | 29.52      | 0.89             |
+| Office Supplies | 2 Bajo (0-20%]   | 2217      | 237373.89 | 39124.83  | 16.48      | 9.34             |
+| Office Supplies | 4 Alto (>50%)    | 680       | 39523.15  | -47140.14 | -119.27    | 100.00           |
+| Technology      | 1 Sin descuento  | 833       | 389733.20 | 132348.42 | 33.96      | 0.24             |
+| Technology      | 2 Bajo (0-20%]   | 843       | 318324.57 | 46864.69  | 14.72      | 15.54            |
+| Technology      | 3 Medio (20-50%] | 148       | 112494.75 | -14178.84 | -12.60     | 79.73            |
+| Technology      | 4 Alto (>50%)    | 23        | 15601.51  | -19579.32 | -125.50    | 100.00           |
++-----------------+------------------+-----------+-----------+-----------+------------+------------------+
+OK - 11 fila(s) - 0.89 s
+
+-- [6] -- Resumen por categoria: cuanto pierde en lineas con descuento
+WITH cat AS (
+    SELECT category,
+           SUM(IF(discount > 0, 1, 0))                         AS lineas_con_desc,
+           ROUND(AVG(IF(discount > 0, discount, NULL)) * 100, 2) AS desc_prom_pct,
+           ROUND(SUM(IF(discount > 0 AND profit < 0, profit, 0)), 2) AS perdidas_con_desc,
+           ROUND(SUM(IF(discount = 0, profit, 0)) / SUM(IF(discount = 0, sales, 0)) * 100, 2) AS margen_sin_desc,
+           ROUND(SUM(IF(discount > 0, profit, 0)) / SUM(IF(discount > 0, sales, 0)) * 100, 2) AS margen_con_desc,
+           ROUND(SUM(IF(discount > 0 AND profit <= 0, 1, 0)) * 100.0 / SUM(IF(discount > 0, 1, 0)), 2) AS pct_no_rent_con_desc
+    FROM superstore
+    GROUP BY category
+)
+SELECT cat.*,
+       RANK() OVER (ORDER BY perdidas_con_desc ASC) AS rank_afectacion
+FROM cat
+ORDER BY rank_afectacion
++-----------------+-----------------+---------------+-------------------+-----------------+-----------------+----------------------+-----------------+
+| category        | lineas_con_desc | desc_prom_pct | perdidas_con_desc | margen_sin_desc | margen_con_desc | pct_no_rent_con_desc | rank_afectacion |
++-----------------+-----------------+---------------+-------------------+-----------------+-----------------+----------------------+-----------------+
+| Furniture       | 1285            | 28.71         | -60936.11         | 22.71           | -8.17           | 58.13                | 1               |
+| Office Supplies | 2897            | 32.72         | -56615.26         | 29.52           | -2.89           | 30.62                | 2               |
+| Technology      | 1014            | 24.10         | -38579.92         | 33.96           | 2.94            | 26.82                | 3               |
++-----------------+-----------------+---------------+-------------------+-----------------+-----------------+----------------------+-----------------+
+OK - 3 fila(s) - 0.87 s
+
+-- [7] -- ---------------------------------------------------------------------
+-- 6.4 Subcategorias mas afectadas (ranking por perdidas en lineas con
+--     descuento) - top 10
+-- ---------------------------------------------------------------------
+WITH sub AS (
+    SELECT category,
+           sub_category,
+           COUNT(*)                                                       AS registros,
+           ROUND(AVG(discount) * 100, 2)                                  AS desc_prom_pct,
+           ROUND(SUM(IF(discount > 0.20, 1, 0)) * 100.0 / COUNT(*), 2)    AS pct_lineas_desc_medio_alto,
+           ROUND(SUM(sales), 2)                                           AS ventas,
+           ROUND(SUM(profit), 2)                                          AS ganancia,
+           ROUND(SUM(profit) / SUM(sales) * 100, 2)                       AS margen_pct,
+           ROUND(SUM(IF(discount > 0 AND profit < 0, profit, 0)), 2)      AS perdidas_con_desc,
+           ROUND(SUM(IF(profit <= 0, 1, 0)) * 100.0 / COUNT(*), 2)        AS pct_no_rentables
+    FROM superstore
+    GROUP BY category, sub_category
+)
+SELECT RANK() OVER (ORDER BY perdidas_con_desc ASC) AS rank_afectacion,
+       sub.*
+FROM sub
+ORDER BY rank_afectacion
+LIMIT 10
++-----------------+-----------------+--------------+-----------+---------------+----------------------------+-----------+-----------+------------+-------------------+------------------+
+| rank_afectacion | category        | sub_category | registros | desc_prom_pct | pct_lineas_desc_medio_alto | ventas    | ganancia  | margen_pct | perdidas_con_desc | pct_no_rentables |
++-----------------+-----------------+--------------+-----------+---------------+----------------------------+-----------+-----------+------------+-------------------+------------------+
+| 1               | Office Supplies | Binders      | 1523      | 37.23         | 40.25                      | 203412.73 | 30221.76  | 14.86      | -38510.50         | 40.25            |
+| 2               | Furniture       | Tables       | 319       | 26.13         | 55.17                      | 206965.53 | -17725.48 | -8.56      | -32412.15         | 64.26            |
+| 3               | Technology      | Machines     | 115       | 30.61         | 46.09                      | 189238.63 | 3384.76   | 1.79       | -30118.67         | 38.26            |
+| 4               | Furniture       | Bookcases    | 228       | 21.11         | 30.70                      | 114880.00 | -3472.56  | -3.02      | -12152.21         | 48.68            |
+| 5               | Furniture       | Chairs       | 617       | 17.02         | 25.61                      | 328449.10 | 26590.17  | 8.10       | -9880.84          | 41.33            |
+| 6               | Office Supplies | Appliances   | 466       | 16.65         | 14.38                      | 107532.16 | 18138.01  | 16.87      | -8629.64          | 14.38            |
+| 7               | Technology      | Phones       | 889       | 15.46         | 12.26                      | 330007.05 | 44515.73  | 13.49      | -7530.62          | 15.52            |
+| 8               | Furniture       | Furnishings  | 957       | 13.83         | 14.42                      | 91705.16  | 13059.14  | 14.24      | -6490.91          | 18.39            |
+| 9               | Office Supplies | Storage      | 846       | 7.47          | 0.00                       | 223843.61 | 21278.83  | 9.51       | -6426.30          | 21.87            |
+| 10              | Office Supplies | Supplies     | 190       | 7.68          | 0.00                       | 46673.54  | -1189.10  | -2.55      | -3015.62          | 17.37            |
++-----------------+-----------------+--------------+-----------+---------------+----------------------------+-----------+-----------+------------+-------------------+------------------+
+OK - 10 fila(s) - 0.91 s
+
+-- [8] -- Subcategorias con ganancia total negativa
+SELECT category, sub_category, ROUND(SUM(profit), 2) AS ganancia,
+       ROUND(AVG(discount) * 100, 2) AS desc_prom_pct
+FROM superstore
+GROUP BY category, sub_category
+HAVING SUM(profit) < 0
+ORDER BY ganancia
++-----------------+--------------+-----------+---------------+
+| category        | sub_category | ganancia  | desc_prom_pct |
++-----------------+--------------+-----------+---------------+
+| Furniture       | Tables       | -17725.48 | 26.13         |
+| Furniture       | Bookcases    | -3472.56  | 21.11         |
+| Office Supplies | Supplies     | -1189.10  | 7.68          |
++-----------------+--------------+-----------+---------------+
+OK - 3 fila(s) - 0.59 s
+
+-- [9] -- ---------------------------------------------------------------------
+-- 6.5 Asociacion entre descuento y rentabilidad
+--   - Correlacion de Pearson entre descuento y ganancia / margen por linea
+--   - Comparacion directa del % no rentable: alto vs sin descuento
+-- ---------------------------------------------------------------------
+SELECT ROUND(CORR(CAST(discount AS DOUBLE), CAST(profit AS DOUBLE)), 4)                AS corr_descuento_ganancia,
+       ROUND(CORR(CAST(discount AS DOUBLE), CAST(profit / sales AS DOUBLE)), 4)        AS corr_descuento_margen_linea,
+       ROUND(SUM(IF(discount > 0.5  AND profit <= 0, 1, 0)) * 100.0 / SUM(IF(discount > 0.5, 1, 0)), 2) AS pct_no_rent_alto,
+       ROUND(SUM(IF(discount = 0    AND profit <= 0, 1, 0)) * 100.0 / SUM(IF(discount = 0, 1, 0)), 2)   AS pct_no_rent_sin_desc,
+       ROUND(SUM(IF(discount > 0.2  AND profit <= 0, 1, 0)) * 100.0 / SUM(IF(discount > 0.2, 1, 0)), 2) AS pct_no_rent_mayor_20,
+       ROUND(SUM(IF(discount <= 0.2 AND profit <= 0, 1, 0)) * 100.0 / SUM(IF(discount <= 0.2, 1, 0)), 2) AS pct_no_rent_hasta_20
+FROM superstore
++-------------------------+-----------------------------+------------------+----------------------+----------------------+----------------------+
+| corr_descuento_ganancia | corr_descuento_margen_linea | pct_no_rent_alto | pct_no_rent_sin_desc | pct_no_rent_mayor_20 | pct_no_rent_hasta_20 |
++-------------------------+-----------------------------+------------------+----------------------+----------------------+----------------------+
+| -0.2195                 | -0.8645                     | 100.00           | 0.63                 | 97.70                | 6.69                 |
++-------------------------+-----------------------------+------------------+----------------------+----------------------+----------------------+
+OK - 1 fila(s) - 0.63 s
+
+-- [10] -- Umbral de quiebre: primer nivel de descuento con margen negativo
+WITH niveles AS (
+    SELECT discount, SUM(profit) / SUM(sales) * 100 AS margen_pct
+    FROM superstore
+    GROUP BY discount
+)
+SELECT MIN(discount) AS primer_descuento_con_margen_negativo
+FROM niveles
+WHERE margen_pct < 0
++--------------------------------------+
+| primer_descuento_con_margen_negativo |
++--------------------------------------+
+| 0.30                                 |
++--------------------------------------+
+OK - 1 fila(s) - 0.46 s
