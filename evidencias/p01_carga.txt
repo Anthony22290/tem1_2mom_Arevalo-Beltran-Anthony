@@ -1,0 +1,191 @@
+EVIDENCIA DE EJECUCION
+Script : sql/p01_carga.sql
+Motor  : Spark SQL 3.5.3 con soporte Hive (HiveQL)
+Fecha  : 2026-11-11 11:13:14
+====================================================================================================
+
+-- [1] -- =====================================================================
+-- PREGUNTA 1 - Procedimiento de carga (DML)
+-- Requisito previo: bash scripts/preparar_datos.sh
+-- Ejecutar desde la raiz del repositorio.
+-- =====================================================================
+
+USE superstore_db
+OK - 0 fila(s) - 4.59 s
+
+-- [2] -- 1) Carga de archivos a las tablas de texto
+LOAD DATA LOCAL INPATH 'csv/preparado/superstore_utf8.csv'
+OVERWRITE INTO TABLE superstore_raw
+OK - 0 fila(s) - 0.86 s
+
+-- [3] LOAD DATA LOCAL INPATH 'csv/preparado/referencia_utf8.csv'
+OVERWRITE INTO TABLE superstore_ref
+OK - 0 fila(s) - 0.31 s
+
+-- [4] SELECT 'superstore_raw_v' AS tabla, COUNT(*) AS registros FROM superstore_raw_v
+UNION ALL
+SELECT 'superstore_ref_v' AS tabla, COUNT(*) AS registros FROM superstore_ref_v
++------------------+-----------+
+| tabla            | registros |
++------------------+-----------+
+| superstore_raw_v | 9994      |
+| superstore_ref_v | 10800     |
++------------------+-----------+
+OK - 2 fila(s) - 2.36 s
+
+-- [5] -- 2) Muestra del problema: el CSV original perdio el punto decimal
+SELECT r.row_id, r.sales AS sales_csv, f.sales AS sales_ref,
+       r.discount AS discount_csv, f.discount AS discount_ref,
+       r.profit AS profit_csv, f.profit AS profit_ref
+FROM superstore_raw_v r
+JOIN superstore_ref_v f ON CAST(r.row_id AS INT) = CAST(f.row_id AS INT)
+WHERE CAST(r.row_id AS INT) <= 5
+ORDER BY r.row_id
++--------+-----------+-----------+--------------+--------------+------------+------------+
+| row_id | sales_csv | sales_ref | discount_csv | discount_ref | profit_csv | profit_ref |
++--------+-----------+-----------+--------------+--------------+------------+------------+
+| 1      | 26196     | 261.96    | 0            | 0            | 419136     | 41.9136    |
+| 2      | 73194     | 731.94    | 0            | 0            | 219582     | 219.582    |
+| 3      | 1462      | 14.62     | 0            | 0            | 68714      | 6.8714     |
+| 4      | 9575775   | 957.5775  | 45           | 0.45         | -383031    | -383.031   |
+| 5      | 22368     | 22.368    | 2            | 0.2          | 25164      | 2.5164     |
++--------+-----------+-----------+--------------+--------------+------------+------------+
+OK - 5 fila(s) - 1.50 s
+
+-- [6] -- 3) Carga de la tabla analitica con particionamiento dinamico
+SET hive.exec.dynamic.partition = true
++-----------------------------+-------+
+| key                         | value |
++-----------------------------+-------+
+| hive.exec.dynamic.partition | true  |
++-----------------------------+-------+
+OK - 1 fila(s) - 0.04 s
+
+-- [7] SET hive.exec.dynamic.partition.mode = nonstrict
++----------------------------------+-----------+
+| key                              | value     |
++----------------------------------+-----------+
+| hive.exec.dynamic.partition.mode | nonstrict |
++----------------------------------+-----------+
+OK - 1 fila(s) - 0.02 s
+
+-- [8] INSERT OVERWRITE TABLE superstore PARTITION (order_year)
+SELECT
+    row_id, order_id, order_date, ship_date, ship_mode,
+    customer_id, customer_name, segment, country, city, state,
+    postal_code, region, product_id, category, sub_category, product_name,
+    sales, quantity, discount, profit,
+    YEAR(order_date) AS order_year
+FROM (
+    SELECT
+        CAST(r.row_id AS INT)                                              AS row_id,
+        TRIM(r.order_id)                                                   AS order_id,
+        TO_DATE(FROM_UNIXTIME(UNIX_TIMESTAMP(r.order_date, 'M/d/yyyy')))   AS order_date,
+        TO_DATE(FROM_UNIXTIME(UNIX_TIMESTAMP(r.ship_date,  'M/d/yyyy')))   AS ship_date,
+        TRIM(r.ship_mode)                                                  AS ship_mode,
+        TRIM(r.customer_id)                                                AS customer_id,
+        TRIM(r.customer_name)                                              AS customer_name,
+        TRIM(r.segment)                                                    AS segment,
+        TRIM(r.country)                                                    AS country,
+        TRIM(r.city)                                                       AS city,
+        TRIM(r.state)                                                      AS state,
+        LPAD(TRIM(r.postal_code), 5, '0')                                  AS postal_code,
+        TRIM(r.region)                                                     AS region,
+        TRIM(r.product_id)                                                 AS product_id,
+        TRIM(r.category)                                                   AS category,
+        TRIM(r.sub_category)                                               AS sub_category,
+        TRIM(r.product_name)                                               AS product_name,
+        -- Se toma el valor con decimales de la referencia SOLO si sus
+        -- digitos (sin punto ni ceros a la izquierda) son identicos al CSV.
+        -- Si no coinciden el resultado es NULL y se detecta en la validacion.
+        CASE WHEN REGEXP_REPLACE(REGEXP_REPLACE(f.sales, '[.]', ''), '^(-?)0+(?=[0-9])', '$1') = r.sales
+             THEN CAST(f.sales AS DECIMAL(12,4)) END                        AS sales,
+        CAST(r.quantity AS INT)                                            AS quantity,
+        -- El descuento se reconstruye sin referencia: '2' -> 0.2, '45' -> 0.45
+        CAST(CASE WHEN r.discount = '0' THEN '0'
+                  ELSE CONCAT('0.', r.discount) END AS DECIMAL(4,2))        AS discount,
+        CASE WHEN REGEXP_REPLACE(REGEXP_REPLACE(f.profit, '[.]', ''), '^(-?)0+(?=[0-9])', '$1') = r.profit
+             THEN CAST(f.profit AS DECIMAL(12,4)) END                       AS profit
+    FROM superstore_raw_v r
+    LEFT JOIN superstore_ref_v f
+           ON CAST(r.row_id AS INT) = CAST(f.row_id AS INT)
+          AND TRIM(r.product_id) = TRIM(f.product_id)
+) t
+OK - 0 fila(s) - 3.37 s
+
+-- [9] -- 4) Evidencia de registros importados
+SHOW PARTITIONS superstore
++-----------------+
+| partition       |
++-----------------+
+| order_year=2014 |
+| order_year=2015 |
+| order_year=2016 |
+| order_year=2017 |
++-----------------+
+OK - 4 fila(s) - 0.13 s
+
+-- [10] SELECT order_year, COUNT(*) AS registros
+FROM superstore
+GROUP BY order_year
+ORDER BY order_year
++------------+-----------+
+| order_year | registros |
++------------+-----------+
+| 2014       | 1993      |
+| 2015       | 2102      |
+| 2016       | 2587      |
+| 2017       | 3312      |
++------------+-----------+
+OK - 4 fila(s) - 0.79 s
+
+-- [11] SELECT COUNT(*)                                          AS total_registros,
+       SUM(CASE WHEN sales    IS NULL THEN 1 ELSE 0 END) AS sales_no_recuperadas,
+       SUM(CASE WHEN profit   IS NULL THEN 1 ELSE 0 END) AS profit_no_recuperados,
+       SUM(CASE WHEN discount IS NULL THEN 1 ELSE 0 END) AS discount_nulos,
+       SUM(CASE WHEN order_date IS NULL OR ship_date IS NULL THEN 1 ELSE 0 END) AS fechas_nulas
+FROM superstore
++-----------------+----------------------+-----------------------+----------------+--------------+
+| total_registros | sales_no_recuperadas | profit_no_recuperados | discount_nulos | fechas_nulas |
++-----------------+----------------------+-----------------------+----------------+--------------+
+| 9994            | 0                    | 0                     | 0              | 0            |
++-----------------+----------------------+-----------------------+----------------+--------------+
+OK - 1 fila(s) - 0.41 s
+
+-- [12] -- Control cruzado: el descuento reconstruido coincide con la referencia
+SELECT COUNT(*) AS descuentos_distintos_a_referencia
+FROM superstore s
+JOIN superstore_ref_v f ON s.row_id = CAST(f.row_id AS INT)
+WHERE s.discount <> CAST(f.discount AS DECIMAL(4,2))
++-----------------------------------+
+| descuentos_distintos_a_referencia |
++-----------------------------------+
+| 0                                 |
++-----------------------------------+
+OK - 1 fila(s) - 1.02 s
+
+-- [13] SELECT ROUND(SUM(sales), 2)  AS ventas_totales,
+       ROUND(SUM(profit), 2) AS ganancia_total,
+       SUM(quantity)         AS unidades
+FROM superstore
++----------------+----------------+----------+
+| ventas_totales | ganancia_total | unidades |
++----------------+----------------+----------+
+| 2297200.86     | 286397.02      | 37873    |
++----------------+----------------+----------+
+OK - 1 fila(s) - 0.31 s
+
+-- [14] SELECT row_id, order_id, order_date, ship_date, customer_name, postal_code,
+       product_name, sales, quantity, discount, profit, order_year
+FROM superstore
+WHERE row_id IN (1, 4, 182, 2235)
+ORDER BY row_id
++--------+----------------+------------+------------+----------------+-------------+--------------------------------------------------------------+----------+----------+----------+-----------+------------+
+| row_id | order_id       | order_date | ship_date  | customer_name  | postal_code | product_name                                                 | sales    | quantity | discount | profit    | order_year |
++--------+----------------+------------+------------+----------------+-------------+--------------------------------------------------------------+----------+----------+----------+-----------+------------+
+| 1      | CA-2016-152156 | 2016-11-08 | 2016-11-11 | Claire Gute    | 42420       | Bush Somerset Collection Bookcase                            | 261.9600 | 2        | 0.00     | 41.9136   | 2016       |
+| 4      | US-2015-108966 | 2015-10-11 | 2015-10-18 | Sean O'Donnell | 33311       | Bretford CR4500 Series Slim Rectangular Table                | 957.5775 | 5        | 0.45     | -383.0310 | 2015       |
+| 182    | CA-2014-166191 | 2014-12-05 | 2014-12-09 | David Kendrick | 62521       | Imation Secure+ Hardware Encrypted USB 2.0 Flash Drive; 16GB | 408.7440 | 7        | 0.20     | 76.6395   | 2014       |
+| 2235   | CA-2017-104066 | 2017-12-05 | 2017-12-10 | Quincy Jones   | 05408       | Logitech ClearChat Comfort/USB Headset H390                  | 205.0300 | 7        | 0.00     | 67.6599   | 2017       |
++--------+----------------+------------+------------+----------------+-------------+--------------------------------------------------------------+----------+----------+----------+-----------+------------+
+OK - 4 fila(s) - 0.42 s
