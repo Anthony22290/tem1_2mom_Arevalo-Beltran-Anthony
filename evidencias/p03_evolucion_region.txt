@@ -1,0 +1,178 @@
+EVIDENCIA DE EJECUCION
+Script : sql/p03_evolucion_region.sql
+Motor  : Spark SQL 3.5.3 con soporte Hive (HiveQL)
+Fecha  : 2026-11-11 11:17:54
+====================================================================================================
+
+-- [1] -- =====================================================================
+-- PREGUNTA 3 - Analisis de evolucion comercial por region
+-- Tecnicas: CTE (WITH) + funciones de ventana (LAG, RANK, SUM OVER)
+-- =====================================================================
+
+USE superstore_db
+OK - 0 fila(s) - 4.13 s
+
+-- [2] -- ---------------------------------------------------------------------
+-- 3.1 Ventas, ganancia, margen y variacion interanual por region y anio
+-- ---------------------------------------------------------------------
+WITH region_anio AS (
+    SELECT region,
+           order_year                 AS anio,
+           SUM(sales)                 AS ventas,
+           SUM(profit)                AS ganancia,
+           COUNT(DISTINCT order_id)   AS ordenes
+    FROM superstore
+    GROUP BY region, order_year
+),
+con_lag AS (
+    SELECT region, anio, ventas, ganancia, ordenes,
+           ganancia / ventas * 100                                     AS margen,
+           LAG(ventas)   OVER (PARTITION BY region ORDER BY anio)      AS ventas_anio_ant,
+           LAG(ganancia) OVER (PARTITION BY region ORDER BY anio)      AS ganancia_anio_ant
+    FROM region_anio
+)
+SELECT region,
+       anio,
+       ordenes,
+       ROUND(ventas, 2)                                                AS ventas,
+       ROUND(ganancia, 2)                                              AS ganancia,
+       ROUND(margen, 2)                                                AS margen_pct,
+       ROUND((ventas - ventas_anio_ant) / ventas_anio_ant * 100, 2)    AS var_ventas_pct,
+       ROUND((ganancia - ganancia_anio_ant) / ABS(ganancia_anio_ant) * 100, 2) AS var_ganancia_pct,
+       RANK() OVER (PARTITION BY anio ORDER BY ventas DESC)            AS rank_ventas_anio,
+       RANK() OVER (PARTITION BY anio ORDER BY ganancia DESC)          AS rank_ganancia_anio
+FROM con_lag
+ORDER BY region, anio
++---------+------+---------+-----------+----------+------------+----------------+------------------+------------------+--------------------+
+| region  | anio | ordenes | ventas    | ganancia | margen_pct | var_ventas_pct | var_ganancia_pct | rank_ventas_anio | rank_ganancia_anio |
++---------+------+---------+-----------+----------+------------+----------------+------------------+------------------+--------------------+
+| Central | 2014 | 230     | 103838.16 | 539.55   | 0.52       | NULL           | NULL             | 4                | 4                  |
+| Central | 2015 | 234     | 102874.22 | 11716.80 | 11.39      | -0.93          | 2071.57          | 3                | 3                  |
+| Central | 2016 | 305     | 147429.38 | 19899.16 | 13.50      | 43.31          | 69.83            | 3                | 3                  |
+| Central | 2017 | 406     | 147098.13 | 7550.84  | 5.13       | -0.22          | -62.05           | 3                | 4                  |
+| East    | 2014 | 261     | 128680.46 | 17059.61 | 13.26      | NULL           | NULL             | 2                | 2                  |
+| East    | 2015 | 296     | 156332.06 | 21091.01 | 13.49      | 21.49          | 23.63            | 1                | 1                  |
+| East    | 2016 | 374     | 180685.82 | 20141.60 | 11.15      | 15.58          | -4.50            | 2                | 2                  |
+| East    | 2017 | 470     | 213082.90 | 33230.56 | 15.60      | 17.93          | 64.98            | 2                | 2                  |
+| South   | 2014 | 165     | 103845.84 | 11879.12 | 11.44      | NULL           | NULL             | 3                | 3                  |
+| South   | 2015 | 170     | 71359.98  | 8318.59  | 11.66      | -31.28         | -29.97           | 4                | 4                  |
+| South   | 2016 | 214     | 93610.22  | 17702.81 | 18.91      | 31.18          | 112.81           | 4                | 4                  |
+| South   | 2017 | 273     | 122905.86 | 8848.91  | 7.20       | 31.30          | -50.01           | 4                | 3                  |
+| West    | 2014 | 313     | 147883.03 | 20065.69 | 13.57      | NULL           | NULL             | 1                | 1                  |
+| West    | 2015 | 338     | 139966.25 | 20492.19 | 14.64      | -5.35          | 2.13             | 2                | 2                  |
+| West    | 2016 | 422     | 187480.18 | 24051.61 | 12.83      | 33.95          | 17.37            | 1                | 1                  |
+| West    | 2017 | 538     | 250128.37 | 43808.96 | 17.51      | 33.42          | 82.15            | 1                | 1                  |
++---------+------+---------+-----------+----------+------------+----------------+------------------+------------------+--------------------+
+OK - 16 fila(s) - 5.28 s
+
+-- [3] -- ---------------------------------------------------------------------
+-- 3.2 Ranking de regiones por anio (quien lidera cada anio)
+-- ---------------------------------------------------------------------
+WITH region_anio AS (
+    SELECT region, order_year AS anio, SUM(sales) AS ventas, SUM(profit) AS ganancia
+    FROM superstore
+    GROUP BY region, order_year
+),
+ranking AS (
+    SELECT anio, region, ventas, ganancia,
+           RANK() OVER (PARTITION BY anio ORDER BY ganancia DESC) AS pos_desc,
+           RANK() OVER (PARTITION BY anio ORDER BY ganancia ASC)  AS pos_asc
+    FROM region_anio
+)
+SELECT anio,
+       MAX(IF(pos_desc = 1, region, NULL))                AS mejor_region,
+       ROUND(MAX(IF(pos_desc = 1, ganancia, NULL)), 2)    AS ganancia_mejor,
+       MAX(IF(pos_asc = 1, region, NULL))                 AS peor_region,
+       ROUND(MAX(IF(pos_asc = 1, ganancia, NULL)), 2)     AS ganancia_peor
+FROM ranking
+GROUP BY anio
+ORDER BY anio
++------+--------------+----------------+-------------+---------------+
+| anio | mejor_region | ganancia_mejor | peor_region | ganancia_peor |
++------+--------------+----------------+-------------+---------------+
+| 2014 | West         | 20065.69       | Central     | 539.55        |
+| 2015 | East         | 21091.01       | South       | 8318.59       |
+| 2016 | West         | 24051.61       | South       | 17702.81      |
+| 2017 | West         | 43808.96       | Central     | 7550.84       |
++------+--------------+----------------+-------------+---------------+
+OK - 4 fila(s) - 1.08 s
+
+-- [4] -- ---------------------------------------------------------------------
+-- 3.3 Desempeno acumulado 2014-2017 y crecimiento del periodo
+--   Criterio de desempeno: se ordena por ganancia acumulada (lo que el
+--   negocio realmente gana) y se informa tambien ventas, margen,
+--   participacion y crecimiento 2014->2017 (CAGR de ventas).
+-- ---------------------------------------------------------------------
+WITH region_anio AS (
+    SELECT region, order_year AS anio, SUM(sales) AS ventas, SUM(profit) AS ganancia
+    FROM superstore
+    GROUP BY region, order_year
+),
+extremos AS (
+    SELECT region, anio, ventas, ganancia,
+           FIRST_VALUE(ventas) OVER (PARTITION BY region ORDER BY anio
+                                     ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS ventas_inicio,
+           LAST_VALUE(ventas)  OVER (PARTITION BY region ORDER BY anio
+                                     ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS ventas_fin,
+           COUNT(*)            OVER (PARTITION BY region)                                      AS n_anios
+    FROM region_anio
+),
+acumulado AS (
+    SELECT region,
+           SUM(ventas)        AS ventas_total,
+           SUM(ganancia)      AS ganancia_total,
+           MAX(ventas_inicio) AS ventas_2014,
+           MAX(ventas_fin)    AS ventas_2017,
+           MAX(n_anios)       AS n_anios
+    FROM extremos
+    GROUP BY region
+)
+SELECT region,
+       ROUND(ventas_total, 2)                                                  AS ventas_total,
+       ROUND(ganancia_total, 2)                                                AS ganancia_total,
+       ROUND(ganancia_total / ventas_total * 100, 2)                           AS margen_pct,
+       ROUND(ventas_total   / SUM(ventas_total)   OVER () * 100, 2)            AS part_ventas_pct,
+       ROUND(ganancia_total / SUM(ganancia_total) OVER () * 100, 2)            AS part_ganancia_pct,
+       ROUND((POWER(ventas_2017 / ventas_2014, 1.0 / (n_anios - 1)) - 1) * 100, 2) AS cagr_ventas_pct,
+       RANK() OVER (ORDER BY ganancia_total DESC)                              AS rank_ganancia,
+       RANK() OVER (ORDER BY ganancia_total / ventas_total DESC)               AS rank_margen,
+       CASE WHEN RANK() OVER (ORDER BY ganancia_total DESC) = 1 THEN 'MEJOR DESEMPENO'
+            WHEN RANK() OVER (ORDER BY ganancia_total ASC)  = 1 THEN 'PEOR DESEMPENO'
+            ELSE '-' END                                                       AS clasificacion
+FROM acumulado
+ORDER BY rank_ganancia
++---------+--------------+----------------+------------+-----------------+-------------------+-----------------+---------------+-------------+-----------------+
+| region  | ventas_total | ganancia_total | margen_pct | part_ventas_pct | part_ganancia_pct | cagr_ventas_pct | rank_ganancia | rank_margen | clasificacion   |
++---------+--------------+----------------+------------+-----------------+-------------------+-----------------+---------------+-------------+-----------------+
+| West    | 725457.82    | 108418.45      | 14.94      | 31.58           | 37.86             | 19.15           | 1             | 1           | MEJOR DESEMPENO |
+| East    | 678781.24    | 91522.78       | 13.48      | 29.55           | 31.96             | 18.31           | 2             | 2           | -               |
+| South   | 391721.91    | 46749.43       | 11.93      | 17.05           | 16.32             | 5.78            | 3             | 3           | -               |
+| Central | 501239.89    | 39706.36       | 7.92       | 21.82           | 13.86             | 12.31           | 4             | 4           | PEOR DESEMPENO  |
++---------+--------------+----------------+------------+-----------------+-------------------+-----------------+---------------+-------------+-----------------+
+OK - 4 fila(s) - 1.49 s
+
+-- [5] -- ---------------------------------------------------------------------
+-- 3.4 Total de la empresa por anio (contexto)
+-- ---------------------------------------------------------------------
+WITH anual AS (
+    SELECT order_year AS anio, SUM(sales) AS ventas, SUM(profit) AS ganancia
+    FROM superstore
+    GROUP BY order_year
+)
+SELECT anio,
+       ROUND(ventas, 2)                                                     AS ventas,
+       ROUND(ganancia, 2)                                                   AS ganancia,
+       ROUND(ganancia / ventas * 100, 2)                                    AS margen_pct,
+       ROUND((ventas / LAG(ventas) OVER (ORDER BY anio) - 1) * 100, 2)      AS var_ventas_pct,
+       ROUND((ganancia / LAG(ganancia) OVER (ORDER BY anio) - 1) * 100, 2)  AS var_ganancia_pct
+FROM anual
+ORDER BY anio
++------+-----------+----------+------------+----------------+------------------+
+| anio | ventas    | ganancia | margen_pct | var_ventas_pct | var_ganancia_pct |
++------+-----------+----------+------------+----------------+------------------+
+| 2014 | 484247.50 | 49543.97 | 10.23      | NULL           | NULL             |
+| 2015 | 470532.51 | 61618.60 | 13.10      | -2.83          | 24.37            |
+| 2016 | 609205.60 | 81795.17 | 13.43      | 29.47          | 32.74            |
+| 2017 | 733215.26 | 93439.27 | 12.74      | 20.36          | 14.24            |
++------+-----------+----------+------------+----------------+------------------+
+OK - 4 fila(s) - 0.51 s
