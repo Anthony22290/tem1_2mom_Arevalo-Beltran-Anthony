@@ -1,0 +1,8 @@
+# Artefactos locales de Spark/Hive
+warehouse/
+metastore_db/
+derby.log
+spark-warehouse/
+__pycache__/
+*.pyc
+.DS_Store
