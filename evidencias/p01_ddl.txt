@@ -1,0 +1,193 @@
+EVIDENCIA DE EJECUCION
+Script : sql/p01_ddl.sql
+Motor  : Spark SQL 3.5.3 con soporte Hive (HiveQL)
+Fecha  : 2026-11-11 11:13:03
+====================================================================================================
+
+-- [1] -- =====================================================================
+-- PREGUNTA 1 - Diseno e implementacion del modelo de datos (DDL)
+-- Dataset: Sample Superstore
+-- Modelo en tres tablas:
+--   superstore_raw : capa cruda, CSV original tal cual, todo STRING
+--   superstore_ref : copia publica del dataset, solo para recuperar
+--                    la posicion del punto decimal (ver docs/p01)
+--   superstore     : tabla analitica tipada, ORC, particionada por anio
+-- =====================================================================
+
+CREATE DATABASE IF NOT EXISTS superstore_db
+COMMENT 'Examen practico 2do momento - Sample Superstore'
+OK - 0 fila(s) - 4.85 s
+
+-- [2] USE superstore_db
+OK - 0 fila(s) - 0.04 s
+
+-- [3] -- ---------------------------------------------------------------------
+-- 1) Capa cruda. OpenCSVSerde porque 6 nombres de producto vienen entre
+--    comillas y contienen ';' (el separador del archivo).
+--    OpenCSVSerde solo admite STRING, por eso se tipa en la capa analitica.
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS superstore_raw
+OK - 0 fila(s) - 0.09 s
+
+-- [4] CREATE TABLE superstore_raw (
+    row_id        STRING,
+    order_id      STRING,
+    order_date    STRING,
+    ship_date     STRING,
+    ship_mode     STRING,
+    customer_id   STRING,
+    customer_name STRING,
+    segment       STRING,
+    country       STRING,
+    city          STRING,
+    state         STRING,
+    postal_code   STRING,
+    region        STRING,
+    product_id    STRING,
+    category      STRING,
+    sub_category  STRING,
+    product_name  STRING,
+    sales         STRING,
+    quantity      STRING,
+    discount      STRING,
+    profit        STRING
+)
+COMMENT 'Capa cruda: CSV original del examen (separador ;) sin transformar'
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
+WITH SERDEPROPERTIES ('separatorChar' = ';', 'quoteChar' = '"')
+STORED AS TEXTFILE
+TBLPROPERTIES ('skip.header.line.count' = '1')
+OK - 0 fila(s) - 0.43 s
+
+-- [5] -- ---------------------------------------------------------------------
+-- 2) Copia de referencia (separador ',') con los decimales intactos.
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS superstore_ref
+OK - 0 fila(s) - 0.03 s
+
+-- [6] CREATE TABLE superstore_ref (
+    row_id        STRING,
+    order_id      STRING,
+    order_date    STRING,
+    ship_date     STRING,
+    ship_mode     STRING,
+    customer_id   STRING,
+    customer_name STRING,
+    segment       STRING,
+    country       STRING,
+    city          STRING,
+    state         STRING,
+    postal_code   STRING,
+    region        STRING,
+    product_id    STRING,
+    category      STRING,
+    sub_category  STRING,
+    product_name  STRING,
+    sales         STRING,
+    quantity      STRING,
+    discount      STRING,
+    profit        STRING
+)
+COMMENT 'Copia publica del dataset, usada solo para restaurar decimales'
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
+WITH SERDEPROPERTIES ('separatorChar' = ',', 'quoteChar' = '"')
+STORED AS TEXTFILE
+TBLPROPERTIES ('skip.header.line.count' = '1')
+OK - 0 fila(s) - 0.11 s
+
+-- [7] -- ---------------------------------------------------------------------
+-- 3) Tabla analitica. Tipos adecuados para el analisis:
+--    fechas DATE, montos DECIMAL (sin error de redondeo de DOUBLE),
+--    codigo postal STRING (conserva ceros a la izquierda).
+--    ORC + SNAPPY: formato columnar comprimido.
+--    Particion por order_year: las consultas por anio leen solo
+--    la particion necesaria (partition pruning).
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS superstore
+OK - 0 fila(s) - 0.02 s
+
+-- [8] CREATE TABLE superstore (
+    row_id        INT            COMMENT 'Identificador unico de la linea',
+    order_id      STRING         COMMENT 'Identificador de la orden',
+    order_date    DATE           COMMENT 'Fecha del pedido',
+    ship_date     DATE           COMMENT 'Fecha de envio',
+    ship_mode     STRING         COMMENT 'Modalidad de envio',
+    customer_id   STRING         COMMENT 'Identificador del cliente',
+    customer_name STRING         COMMENT 'Nombre del cliente',
+    segment       STRING         COMMENT 'Segmento: Consumer, Corporate, Home Office',
+    country       STRING         COMMENT 'Pais',
+    city          STRING         COMMENT 'Ciudad',
+    state         STRING         COMMENT 'Estado',
+    postal_code   STRING         COMMENT 'Codigo postal de 5 digitos',
+    region        STRING         COMMENT 'Region: Central, East, South, West',
+    product_id    STRING         COMMENT 'Identificador del producto',
+    category      STRING         COMMENT 'Categoria',
+    sub_category  STRING         COMMENT 'Subcategoria',
+    product_name  STRING         COMMENT 'Nombre del producto',
+    sales         DECIMAL(12,4)  COMMENT 'Venta neta de la linea (USD)',
+    quantity      INT            COMMENT 'Unidades vendidas',
+    discount      DECIMAL(4,2)   COMMENT 'Descuento aplicado (0 a 1)',
+    profit        DECIMAL(12,4)  COMMENT 'Ganancia de la linea (USD), puede ser negativa'
+)
+COMMENT 'Tabla analitica Superstore (tipada y corregida)'
+PARTITIONED BY (order_year INT)
+STORED AS ORC
+TBLPROPERTIES ('orc.compress' = 'SNAPPY')
+OK - 0 fila(s) - 0.15 s
+
+-- [9] -- ---------------------------------------------------------------------
+-- 4) Vistas de lectura de las capas de texto. Excluyen la fila de
+--    cabecera por si el motor no respeta 'skip.header.line.count'
+--    (Hive lo respeta; Spark SQL con OpenCSVSerde no).
+-- ---------------------------------------------------------------------
+CREATE OR REPLACE VIEW superstore_raw_v AS
+SELECT * FROM superstore_raw WHERE row_id <> 'Row ID'
+OK - 0 fila(s) - 0.40 s
+
+-- [10] CREATE OR REPLACE VIEW superstore_ref_v AS
+SELECT * FROM superstore_ref WHERE row_id <> 'Row ID'
+OK - 0 fila(s) - 0.08 s
+
+-- [11] SHOW TABLES
++---------------+------------------+-------------+
+| namespace     | tableName        | isTemporary |
++---------------+------------------+-------------+
+| superstore_db | superstore       | False       |
+| superstore_db | superstore_raw   | False       |
+| superstore_db | superstore_raw_v | False       |
+| superstore_db | superstore_ref   | False       |
+| superstore_db | superstore_ref_v | False       |
++---------------+------------------+-------------+
+OK - 5 fila(s) - 1.22 s
+
+-- [12] DESCRIBE superstore
++-------------------------+---------------+------------------------------------------------+
+| col_name                | data_type     | comment                                        |
++-------------------------+---------------+------------------------------------------------+
+| row_id                  | int           | Identificador unico de la linea                |
+| order_id                | string        | Identificador de la orden                      |
+| order_date              | date          | Fecha del pedido                               |
+| ship_date               | date          | Fecha de envio                                 |
+| ship_mode               | string        | Modalidad de envio                             |
+| customer_id             | string        | Identificador del cliente                      |
+| customer_name           | string        | Nombre del cliente                             |
+| segment                 | string        | Segmento: Consumer, Corporate, Home Office     |
+| country                 | string        | Pais                                           |
+| city                    | string        | Ciudad                                         |
+| state                   | string        | Estado                                         |
+| postal_code             | string        | Codigo postal de 5 digitos                     |
+| region                  | string        | Region: Central, East, South, West             |
+| product_id              | string        | Identificador del producto                     |
+| category                | string        | Categoria                                      |
+| sub_category            | string        | Subcategoria                                   |
+| product_name            | string        | Nombre del producto                            |
+| sales                   | decimal(12,4) | Venta neta de la linea (USD)                   |
+| quantity                | int           | Unidades vendidas                              |
+| discount                | decimal(4,2)  | Descuento aplicado (0 a 1)                     |
+| profit                  | decimal(12,4) | Ganancia de la linea (USD), puede ser negativa |
+| order_year              | int           | NULL                                           |
+| # Partition Information |               |                                                |
+| # col_name              | data_type     | comment                                        |
+| order_year              | int           | NULL                                           |
++-------------------------+---------------+------------------------------------------------+
+OK - 25 fila(s) - 0.16 s
