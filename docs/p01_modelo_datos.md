@@ -8,40 +8,48 @@ Construya el modelo de almacenamiento en Apache Hive para el dataset proporciona
 
 ## Estrategia de solución
 
-1. **Inspección del archivo** antes de la ingesta: separador, codificación, fin de línea, cabecera, formatos de fecha y números.
-2. **Modelo en capas** dentro de la base `superstore_db`:
+Antes de crear las tablas abrí el CSV para ver cómo venía. Encontré varias cosas a tener en cuenta:
 
-| Tabla | Formato | Propósito |
-|-------|---------|-----------|
-| `superstore_raw` | TEXTFILE + OpenCSVSerde (`;`) | Copia exacta del CSV, todo `STRING`. Nada se pierde y sirve para la auditoría (P2). |
-| `superstore_ref` | TEXTFILE + OpenCSVSerde (`,`) | Copia pública del mismo dataset, solo para recuperar la posición del punto decimal. |
-| `superstore` | **ORC + SNAPPY**, particionada por `order_year` | Tabla analítica tipada y corregida que usan todas las preguntas. |
+- Las columnas están separadas por `;` y no por coma.
+- Tiene 21 columnas y 9 994 registros, más la fila de títulos.
+- Las fechas vienen como texto en formato mes/día/año (`11/8/2016`).
+- Algunos nombres tienen acentos que no se leen bien porque el archivo no está en UTF-8.
+- **Los números no tienen punto decimal.** Este fue el problema más grande y lo explico abajo.
 
-3. **Transformación** `superstore_raw → superstore` con `INSERT OVERWRITE ... PARTITION (order_year)` (partición dinámica), conversión de tipos y correcciones.
-4. **Validación** de la carga con conteos, nulos y controles cruzados.
+Con eso decidí trabajar con tres tablas dentro de la base de datos `superstore_db`:
 
-### Hallazgo principal: el CSV perdió el separador decimal
+| Tabla | Para qué la uso |
+|-------|-----------------|
+| `superstore_raw` | Guarda el CSV tal cual, con todas las columnas como texto (`STRING`). Así no pierdo nada y puedo revisar el dato original en la Pregunta 2. |
+| `superstore_ref` | Una copia pública del mismo dataset que sí tiene los decimales. Solo la uso para saber dónde va el punto. |
+| `superstore` | La tabla final, con los tipos correctos (fechas, números, texto). Es la que uso en todas las demás preguntas. |
 
-Al inspeccionar el archivo se ve que `Sales`, `Discount` y `Profit` no tienen punto decimal:
+La tabla final la guardé en formato **ORC**, que comprime los datos y es más rápido para consultas. También la dividí en **particiones por año** (`order_year`), para que cuando filtre por año Hive solo lea esa parte de los datos.
 
-| row_id | sales_csv | valor real | discount_csv | valor real | profit_csv | valor real |
+### El problema de los decimales
+
+Al revisar el archivo me di cuenta de que los montos estaban raros. Por ejemplo, en la primera fila la venta decía `26196`, pero el valor real es `261.96`. Pasaba lo mismo con el descuento y la ganancia:
+
+| row_id | sales en el CSV | valor real | discount en el CSV | valor real | profit en el CSV | valor real |
 |---|---|---|---|---|---|---|
 | 1 | 26196 | 261.96 | 0 | 0 | 419136 | 41.9136 |
 | 4 | 9575775 | 957.5775 | 45 | 0.45 | -383031 | -383.031 |
 | 5 | 22368 | 22.368 | 2 | 0.2 | 25164 | 2.5164 |
 
-Si se cargaran tal cual, las ventas totales serían cientos de veces mayores y los descuentos superarían el 100 %.
+Si cargaba los datos así, todos los totales iban a salir mal, y Hive no iba a dar ningún error que me avisara. Lo resolví así:
 
-- **Discount** se puede reconstruir sin ayuda externa: todos los descuentos son menores a 1, entonces el valor real es `0.` + dígitos (`2 → 0.2`, `45 → 0.45`).
-- **Sales y Profit** no se pueden reconstruir solo con el CSV, porque la posición del punto es variable (de 0 a 4 decimales). Se usó una copia pública del mismo dataset (`csv/referencia/superstore_referencia.csv`, publicada en GitHub por `leonism/sample-superstore`) **solo para saber dónde va el punto**. El valor se acepta únicamente si sus dígitos, sin punto ni ceros a la izquierda, son **idénticos** a los del CSV del examen; si no, quedaría `NULL`. Se cruza por `row_id` y `product_id`.
-- Las demás columnas (fechas, IDs, nombres, regiones, etc.) **se toman siempre del CSV del examen**. La copia de referencia es una versión posterior con los años desplazados (+1) y 10 800 filas, por eso no se usa para nada más.
+- **Descuento:** como todos los descuentos son menores a 1, basta con poner `0.` adelante (`45` → `0.45`, `2` → `0.2`).
+- **Ventas y ganancia:** aquí no se puede adivinar dónde va el punto, porque algunos valores tienen 2 decimales y otros 3 o 4. Busqué una copia pública del mismo dataset (`csv/referencia/superstore_referencia.csv`) y la usé solo para ver la posición del punto. Para estar seguro, solo acepto el valor si los números son **exactamente los mismos** que en mi CSV; si no coinciden, queda vacío (`NULL`).
+- Todas las demás columnas (fechas, clientes, productos, regiones…) las saco siempre de mi CSV original.
+
+También corregí los códigos postales que perdieron el 0 inicial (`5408` → `05408`).
 
 ## Consultas HiveQL desarrolladas
 
-- DDL: [`sql/p01_ddl.sql`](../sql/p01_ddl.sql)
+- Creación de tablas: [`sql/p01_ddl.sql`](../sql/p01_ddl.sql)
 - Carga y validación: [`sql/p01_carga.sql`](../sql/p01_carga.sql)
 
-Fragmento central de la carga:
+La parte más importante es el `INSERT` que pasa los datos de la tabla cruda a la tabla final, convirtiendo cada columna a su tipo:
 
 ```sql
 INSERT OVERWRITE TABLE superstore PARTITION (order_year)
@@ -49,10 +57,14 @@ SELECT ..., YEAR(order_date) AS order_year
 FROM (
     SELECT
         CAST(r.row_id AS INT)                                            AS row_id,
+        -- convierto el texto '11/8/2016' a fecha
         TO_DATE(FROM_UNIXTIME(UNIX_TIMESTAMP(r.order_date, 'M/d/yyyy'))) AS order_date,
+        -- relleno con ceros a la izquierda hasta 5 digitos
         LPAD(TRIM(r.postal_code), 5, '0')                                AS postal_code,
+        -- tomo la venta de la referencia solo si los digitos son iguales
         CASE WHEN REGEXP_REPLACE(REGEXP_REPLACE(f.sales, '[.]', ''), '^(-?)0+(?=[0-9])', '$1') = r.sales
              THEN CAST(f.sales AS DECIMAL(12,4)) END                      AS sales,
+        -- al descuento le agrego '0.' adelante
         CAST(CASE WHEN r.discount = '0' THEN '0'
                   ELSE CONCAT('0.', r.discount) END AS DECIMAL(4,2))      AS discount,
         ...
@@ -65,43 +77,47 @@ FROM (
 
 ## Procedimiento de carga
 
-Desde la raíz del repositorio:
+Todo se ejecuta desde la carpeta principal del repositorio:
 
 ```bash
-# 1. Preparar archivos: Windows-1252 -> UTF-8 y CRLF -> LF (no cambia valores)
+# 1. Paso el CSV a UTF-8 y quito los saltos de línea de Windows
 bash scripts/preparar_datos.sh
 
-# 2. Crear base, tablas y vistas
+# 2. Creo la base de datos y las tablas
 beeline -u jdbc:hive2://localhost:10000 -f sql/p01_ddl.sql
 
-# 3. Cargar y transformar
+# 3. Cargo los datos y los paso a la tabla final
 beeline -u jdbc:hive2://localhost:10000 -f sql/p01_carga.sql
 ```
 
-`LOAD DATA LOCAL INPATH` usa rutas relativas (`csv/preparado/...`), por eso se ejecuta desde la raíz. Si HiveServer2 corre en otra máquina o contenedor, primero se copian los archivos a HDFS (`hdfs dfs -put csv/preparado /user/hive/superstore/`) y se usa `LOAD DATA INPATH` sin `LOCAL`.
+El paso 1 es necesario porque el archivo venía con codificación de Windows (por eso se veían mal los acentos) y con un salto de línea que dejaba un carácter extraño al final de la columna `Profit`. No cambia ningún valor.
 
-Las evidencias de este repositorio se generaron con `python scripts/ejecutar_hiveql.py <script.sql>`, que ejecuta el mismo HiveQL sobre Spark SQL con soporte Hive (metastore local).
+Si Hive está en otra máquina, primero hay que subir los archivos a HDFS (`hdfs dfs -put csv/preparado /user/hive/superstore/`) y usar `LOAD DATA INPATH` sin la palabra `LOCAL`.
+
+Para generar las evidencias usé `python scripts/ejecutar_hiveql.py <archivo.sql>`, que ejecuta el mismo código HiveQL con Spark SQL en modo compatible con Hive.
 
 ## Evidencia de ejecución
 
-- [`evidencias/p01_ddl.txt`](../evidencias/p01_ddl.txt): creación de tablas y `DESCRIBE superstore`.
-- [`evidencias/p01_carga.txt`](../evidencias/p01_carga.txt): carga, particiones y validaciones.
+- [`evidencias/p01_ddl.txt`](../evidencias/p01_ddl.txt): creación de las tablas y estructura de `superstore`.
+- [`evidencias/p01_carga.txt`](../evidencias/p01_carga.txt): carga de los datos y revisiones.
 
 ## Resultado obtenido
 
-| Control | Resultado |
-|---------|-----------|
-| Registros en `superstore_raw_v` | 9 994 |
-| Registros en `superstore` | 9 994 |
-| Particiones | 2014 (1 993), 2015 (2 102), 2016 (2 587), 2017 (3 312) |
-| `sales` / `profit` no recuperados (NULL) | 0 / 0 |
-| Descuentos distintos a la referencia | 0 |
-| Fechas nulas tras la conversión | 0 |
+Después de cargar hice varias revisiones para comprobar que todo quedó bien:
+
+| Revisión | Resultado |
+|----------|-----------|
+| Registros en el CSV | 9 994 |
+| Registros en la tabla final | 9 994 |
+| Registros por año | 2014: 1 993 · 2015: 2 102 · 2016: 2 587 · 2017: 3 312 |
+| Ventas o ganancias que no se pudieron recuperar | 0 |
+| Descuentos diferentes a la referencia | 0 |
+| Fechas que no se pudieron convertir | 0 |
 | Ventas totales | 2 297 200.86 USD |
 | Ganancia total | 286 397.02 USD |
 | Unidades vendidas | 37 873 |
 
-Registros de muestra ya corregidos (incluye un nombre con `;` y un código postal con cero inicial):
+Algunos registros ya corregidos:
 
 | row_id | order_date | postal_code | product_name | sales | discount | profit |
 |---|---|---|---|---|---|---|
@@ -112,12 +128,12 @@ Registros de muestra ya corregidos (incluye un nombre con `;` y un código posta
 
 ## Interpretación técnica
 
-Revisar el archivo antes de cargarlo fue clave: el CSV parecía correcto (21 columnas, sin vacíos), pero los montos estaban multiplicados por potencias de 10 distintas en cada fila. Con un `CAST` directo a número Hive no habría dado error, y todos los análisis posteriores habrían salido mal sin que nadie lo notara.
+Lo que más aprendí en esta pregunta es que hay que revisar el archivo antes de cargarlo. A simple vista el CSV parecía estar bien (tenía todas las columnas y ningún vacío), pero los montos estaban mal. Si no me hubiera dado cuenta, todos los resultados de las demás preguntas habrían salido mal.
 
-Separar una capa cruda de una analítica permite auditar el dato original (P2) sin perderlo y aplicar las correcciones en un solo lugar. La regla de recuperación de decimales es conservadora: solo acepta el valor si los dígitos coinciden exactamente, y la validación confirmó que coinciden en las 9 994 filas. Además, los totales obtenidos (2.297 M en ventas y 286 mil en ganancia) son los conocidos de este dataset.
+Tener una tabla cruda y otra final me ayudó a separar el dato original del dato corregido. Así puedo revisar el original sin modificarlo y hacer todas las correcciones en un solo lugar. Las revisiones muestran que las 9 994 filas se recuperaron bien, y los totales coinciden con los que se conocen de este dataset.
 
-ORC con SNAPPY y la partición por año dejan la tabla lista para consultas analíticas: se leen solo las columnas usadas y, cuando se filtra por año, solo la partición necesaria.
+Usé `DECIMAL` para los montos en vez de `DOUBLE` porque `DOUBLE` puede dar pequeños errores de redondeo al sumar muchos valores. El código postal lo dejé como texto porque es un código, no un número para hacer cálculos.
 
 ## Conclusión
 
-El modelo queda implementado en `superstore_db.superstore` con 9 994 registros, tipos adecuados (DATE, DECIMAL, INT, STRING) y las inconsistencias de formato corregidas y verificadas. Esta tabla es la base para todas las preguntas siguientes.
+La tabla `superstore_db.superstore` quedó con los 9 994 registros, los tipos de datos correctos y los errores del archivo corregidos y revisados. Esta es la tabla que uso en el resto del examen.

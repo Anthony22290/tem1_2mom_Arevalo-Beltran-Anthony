@@ -6,16 +6,16 @@ Identifique los productos de mayor y menor desempeño económico: los cinco prod
 
 ## Estrategia de solución
 
-1. **Definición de producto:** `product_id` + `product_name`. En la Pregunta 2 se encontró que 32 `product_id` tienen dos nombres distintos; si se agrupara solo por ID se mezclarían artículos diferentes. Resultado: **1 894 productos**.
-2. **Tabla `producto_metricas`:** ventas, ganancia, unidades, margen (`SUM(profit) / SUM(sales)`) y descuento promedio por producto. Se materializa una vez y la reutilizan todas las consultas.
-3. **Funciones de ventana:**
-   - `RANK() OVER (PARTITION BY category ORDER BY ganancia DESC)`: posición en la categoría. Si hay empates, deja huecos (1, 2, 2, 4).
-   - `DENSE_RANK()`: se usa para unidades y margen, donde los empates son frecuentes y conviene no saltar posiciones (1, 2, 2, 3).
-   - `SUM(ganancia) OVER (PARTITION BY category ORDER BY ganancia DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`: ganancia **acumulada** dentro de la categoría, para ver cuánto concentran los primeros productos.
-   - `PERCENT_RANK()`: percentil del producto dentro de su categoría.
-4. **“Volumen de ventas”** se interpreta como importe vendido (USD). También se muestra el ranking por unidades.
-5. **“Menor rentabilidad”** se mide de dos formas: por **pérdida absoluta** (ganancia acumulada más negativa) y por **peor margen %** (solo productos con ventas ≥ 1 000 USD, para que un producto con una sola venta pequeña no distorsione el ranking).
-6. El ranking completo se guarda en la tabla `producto_ranking` y se exporta a CSV.
+1. **Qué es un producto:** en la Pregunta 2 vi que hay 32 códigos de producto con dos nombres distintos. Para no mezclar productos diferentes, agrupé por **código y nombre**. Así quedaron **1 894 productos**.
+2. **Tabla `producto_metricas`:** primero calculé, para cada producto, las ventas, la ganancia, las unidades, el margen y el descuento promedio. La guardé como tabla para no repetir el cálculo en cada consulta.
+3. **Funciones de ventana que usé:**
+   - `RANK()`: posición del producto dentro de su categoría. Si dos productos empatan, los dos quedan en el mismo puesto y se salta el siguiente (1, 2, 2, 4).
+   - `DENSE_RANK()`: igual que `RANK`, pero sin saltar puestos (1, 2, 2, 3). Lo usé en unidades y margen, donde hay muchos empates.
+   - `SUM() OVER (... ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`: suma acumulada. Va sumando la ganancia desde el primer producto hasta el actual, para ver cuánto aportan entre todos los primeros puestos.
+   - `PERCENT_RANK()`: en qué porcentaje del ranking está cada producto.
+4. Tomé **“volumen de ventas”** como el dinero vendido (USD), pero también muestro el ranking por unidades.
+5. Para **“menor rentabilidad”** hice dos rankings: por **mayor pérdida en dinero** y por **peor margen %**. En el segundo solo incluí productos con ventas de al menos 1 000 USD, para que no aparezca un producto que se vendió una sola vez por poco dinero.
+6. Guardé el ranking de todos los productos en la tabla `producto_ranking` y lo exporté a un CSV.
 
 ## Consulta HiveQL desarrollada
 
@@ -41,7 +41,7 @@ WHERE rank_cat <= 5
 ORDER BY category, rank_cat;
 ```
 
-En un clúster Hive, el ranking completo se exporta con:
+En Hive, el ranking completo también se puede exportar a una carpeta con:
 
 ```sql
 INSERT OVERWRITE LOCAL DIRECTORY 'resultados/p05_ranking'
@@ -56,10 +56,10 @@ SELECT * FROM producto_ranking ORDER BY category, rank_ganancia;
 
 ## Resultado obtenido
 
-### Top 5 por ganancia acumulada en cada categoría
+### Los 5 productos con más ganancia en cada categoría
 
-| Categoría | Pos. | Producto | Ventas | Ganancia | Margen % | % acum. de la categoría |
-|-----------|:---:|----------|-------:|---------:|---------:|------------------------:|
+| Categoría | Puesto | Producto | Ventas | Ganancia | Margen % | % acumulado de la categoría |
+|-----------|:---:|----------|-------:|---------:|---------:|----------------------------:|
 | Furniture | 1 | Hon Deluxe Fabric Upholstered Stacking Chairs, Rounded Back | 10 637.53 | 1 927.44 | 18.12 | 10.45 |
 | Furniture | 2 | Global Deluxe High-Back Manager's Chair | 8 665.19 | 1 558.59 | 17.99 | 18.89 |
 | Furniture | 3 | Hon Pagoda Stacking Chairs | 6 483.80 | 1 540.70 | 23.76 | 27.24 |
@@ -76,29 +76,29 @@ SELECT * FROM producto_ranking ORDER BY category, rank_ganancia;
 | Technology | 4 | HP Designjet T520 Inkjet Large Format Printer - 24" Color | 18 374.90 | 4 094.98 | 22.29 | 28.08 |
 | Technology | 5 | Ativa V4110MDD Micro-Cut Shredder | 7 699.89 | 3 772.95 | 49.00 | 30.68 |
 
-### Top 5 por volumen de ventas (USD)
+### Los 5 productos que más vendieron (en dólares)
 
-| Pos. | Categoría | Producto | Ventas | Unidades (dense rank) | Ganancia | Margen % |
-|:---:|-----------|----------|-------:|----------------------:|---------:|---------:|
+| Puesto | Categoría | Producto | Ventas | Unidades (puesto) | Ganancia | Margen % |
+|:---:|-----------|----------|-------:|------------------:|---------:|---------:|
 | 1 | Technology | Canon imageCLASS 2200 Advanced Copier | 61 599.82 | 20 (41°) | 25 199.93 | 40.91 |
 | 2 | Office Supplies | Fellowes PB500 Electric Punch … Binding Machine | 27 453.38 | 31 (30°) | 7 753.04 | 28.24 |
 | 3 | Technology | Cisco TelePresence System EX90 Videoconferencing Unit | 22 638.48 | 6 (55°) | −1 811.08 | −8.00 |
 | 4 | Furniture | HON 5400 Series Task Chairs for Big and Tall | 21 870.58 | 39 (22°) | 0.00 | 0.00 |
 | 5 | Office Supplies | GBC DocuBind TL300 Electric Binding System | 19 823.48 | 37 (24°) | 2 233.51 | 11.27 |
 
-Por **unidades**, el primero es *GBC Premium Transparent Covers* (67 unidades, 780 USD). `DENSE_RANK` deja a dos productos empatados en la posición 4 con 59 unidades, y el siguiente queda 5° (con `RANK` habría sido 6°).
+Si se ordena por **unidades**, el primero es *GBC Premium Transparent Covers* (67 unidades, pero solo 780 USD). Aquí se ve la diferencia entre `RANK` y `DENSE_RANK`: dos productos empatan en el puesto 4 con 59 unidades, y con `DENSE_RANK` el siguiente queda 5°, mientras que con `RANK` quedaría 6°.
 
-### Los 5 productos con menor rentabilidad (mayor pérdida acumulada)
+### Los 5 productos con menor rentabilidad (los que más dinero perdieron)
 
-| Pos. | Categoría / Subcat. | Producto | Ventas | Ganancia | Margen % | Desc. prom. % | Posición en su categoría |
-|:---:|---------------------|----------|-------:|---------:|---------:|--------------:|--------------------------|
+| Puesto | Categoría / Subcategoría | Producto | Ventas | Ganancia | Margen % | Descuento prom. % | Puesto en su categoría |
+|:---:|--------------------------|----------|-------:|---------:|---------:|------------------:|------------------------|
 | 1 | Technology / Machines | Cubify CubeX 3D Printer Double Head Print | 11 099.96 | −8 879.97 | −80.00 | 53.33 | 413 de 413 |
 | 2 | Technology / Machines | Lexmark MX611dhe Monochrome Laser Printer | 16 829.90 | −4 589.97 | −27.27 | 40.00 | 412 de 413 |
 | 3 | Technology / Machines | Cubify CubeX 3D Printer Triple Head Print | 7 999.98 | −3 839.99 | −48.00 | 50.00 | 411 de 413 |
 | 4 | Furniture / Tables | Chromcraft Bull-Nose Wood Oval Conference Tables & Bases | 9 917.64 | −2 876.12 | −29.00 | 28.00 | 383 de 383 |
 | 5 | Furniture / Tables | Bush Advantage Collection Racetrack Conference Table | 9 544.73 | −1 934.40 | −20.27 | 35.00 | 382 de 383 |
 
-Por **peor margen %** (ventas ≥ 1 000 USD): Epson TM-T88V Thermal Printer (−87.18 %), Cubify CubeX Double Head (−80.00 %), BoxOffice Meeting Room Tables (−67.31 %), Bevis Conference Tables (−58.26 %) y Cubify CubeX Triple Head (−48.00 %). Todos tienen descuentos promedio de entre 47 % y 55 %.
+Ordenando por **peor margen %** (con ventas de al menos 1 000 USD) aparecen: Epson TM-T88V Thermal Printer (−87.18 %), Cubify CubeX Double Head (−80.00 %), BoxOffice Meeting Room Tables (−67.31 %), Bevis Conference Tables (−58.26 %) y Cubify CubeX Triple Head (−48.00 %). Todos se vendieron con descuentos promedio de entre 47 % y 55 %.
 
 ### Resumen por categoría
 
@@ -108,17 +108,16 @@ Por **peor margen %** (ventas ≥ 1 000 USD): Epson TM-T88V Thermal Printer (−
 | Office Supplies | 1 098 | 719 047.08 | 122 490.89 | 17.04 | 124 | 11.29 |
 | Furniture | 383 | 741 999.86 | 18 451.27 | 2.49 | 123 | 32.11 |
 
-En total, **304 de 1 894 productos (16 %) acumulan pérdidas**, por −77 092.05 USD.
+En total, **304 de los 1 894 productos (16 %) perdieron dinero**, en conjunto −77 092.05 USD.
 
 ## Interpretación técnica
 
-- **Technology es la categoría más concentrada:** un solo producto, la copiadora Canon imageCLASS 2200, genera el **17 % de la ganancia** de la categoría y es además el producto más vendido de todo el catálogo, con un margen del 41 %. Las copiadoras dominan su top 5.
-- **Office Supplies está muy atomizada:** con 1 098 productos, el top 5 apenas suma el 15.7 % de la ganancia de la categoría. Sus productos más rentables son máquinas encuadernadoras, con márgenes del 21 % al 31 %.
-- **Vender mucho no garantiza ganar:** del top 5 en ventas, la *Cisco TelePresence EX90* pierde 1 811 USD y la *HON 5400 Task Chair* gana exactamente 0. Ordenar solo por ventas daría una imagen engañosa de los mejores productos.
-- **Los peores productos tienen un patrón común:** son impresoras 3D, impresoras láser y mesas de conferencia con descuentos promedio del 28 % al 53 %. Las subcategorías *Machines* y *Tables* se repiten, lo que adelanta lo que se analiza en la Pregunta 6.
-- **Furniture vende tanto como Office Supplies, pero gana 6.6 veces menos:** su margen es de 2.5 % y uno de cada tres productos de la categoría pierde dinero.
-- `RANK` y `DENSE_RANK` coinciden en ganancia (no hay empates en los primeros puestos), pero difieren en unidades y margen, donde hay muchos valores repetidos.
+- **En Technology un solo producto pesa mucho:** la copiadora Canon imageCLASS 2200 genera el 17 % de toda la ganancia de la categoría. Además es el producto más vendido de toda la tienda y tiene un margen del 41 %. Casi todo el top 5 de Technology son copiadoras.
+- **En Office Supplies la ganancia está más repartida:** como tiene 1 098 productos, los 5 primeros solo suman el 15.7 % de la ganancia de la categoría. Sus mejores productos son máquinas encuadernadoras.
+- **Vender mucho no siempre significa ganar:** entre los 5 productos más vendidos, la Cisco TelePresence perdió 1 811 USD y la silla HON 5400 no dejó ninguna ganancia. Si solo hubiera mirado las ventas, habría pensado que eran buenos productos.
+- **Los productos que más pierden se parecen:** son impresoras 3D, impresoras láser y mesas de conferencia, y todos tienen descuentos altos (de 28 % a 53 %). Esto me hace pensar que el problema son los descuentos, y lo reviso en la Pregunta 6.
+- **Furniture es la categoría con más problemas:** vende casi lo mismo que Office Supplies, pero gana casi 7 veces menos, y 1 de cada 3 de sus productos pierde dinero.
 
 ## Conclusión
 
-Los productos estrella son las copiadoras (Technology) y las encuadernadoras (Office Supplies). Las mayores pérdidas se concentran en impresoras 3D, impresoras láser y mesas vendidas con descuentos altos. Furniture es la categoría problemática: el 32 % de sus productos tiene pérdidas. Conviene revisar precios y descuentos de esos productos en lugar de seguir aumentando su volumen.
+Los productos más rentables son las copiadoras (Technology) y las encuadernadoras (Office Supplies). Los que más pierden son impresoras y mesas vendidas con mucho descuento. Furniture es la categoría más preocupante, porque casi un tercio de sus productos tiene pérdidas. Antes de buscar vender más de esos productos, habría que revisar sus precios y descuentos.

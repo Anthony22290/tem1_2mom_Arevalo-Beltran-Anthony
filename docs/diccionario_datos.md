@@ -30,17 +30,17 @@
 | 21 | Profit | `profit` | DECIMAL(12,4) | Ganancia (o pérdida) de la línea (USD) | Puede ser negativa; rango −6 599.978 – 8 399.976 |
 | – | (derivado) | `order_year` | INT (partición) | Año de `order_date` | 2014, 2015, 2016, 2017 |
 
-## Justificación de tipos
+## Por qué elegí estos tipos
 
-- **DATE** para fechas: permite `DATEDIFF`, `YEAR`, `MONTH`, `TRUNC` y comparaciones directas. El origen viene como texto `M/d/yyyy` y se convierte con `UNIX_TIMESTAMP(..., 'M/d/yyyy')`.
-- **DECIMAL** para montos: evita el error de redondeo de `DOUBLE` al sumar miles de valores. `DECIMAL(12,4)` cubre hasta 99 999 999.9999 con los 4 decimales que trae el dataset.
-- **DECIMAL(4,2)** para descuento: el valor máximo es 0.80.
-- **STRING** para `postal_code`: es un código, no una cantidad, y en el CSV perdió los ceros a la izquierda (estados de Nueva Inglaterra).
-- **INT** para `row_id` y `quantity`.
+- **DATE para las fechas:** en el CSV vienen como texto (`11/8/2016`). Al convertirlas a fecha puedo restar fechas (`DATEDIFF`), sacar el año o el mes y ordenarlas bien.
+- **DECIMAL para los montos:** `DOUBLE` puede dar pequeños errores de redondeo al sumar muchos valores. `DECIMAL(12,4)` guarda los 4 decimales exactos que tiene el dataset.
+- **DECIMAL(4,2) para el descuento:** el valor más alto es 0.80, así que alcanza con 2 decimales.
+- **STRING para el código postal:** es un código y no un número para hacer cuentas. Además, si lo guardo como número se pierden los ceros a la izquierda (`05408` quedaría `5408`).
+- **INT para `row_id` y `quantity`:** son números enteros.
 
-## Inconsistencias detectadas en el archivo original
+## Problemas que encontré en el archivo original
 
-| Problema | Ejemplo | Tratamiento |
+| Problema | Ejemplo | Cómo lo resolví |
 |----------|---------|-------------|
 | Separador decimal eliminado en `Sales`, `Discount` y `Profit` | `Sales = 26196` (real 261.96), `Discount = 45` (real 0.45), `Profit = 419136` (real 41.9136) | `Discount`: se reconstruye como `0.` + dígitos. `Sales`/`Profit`: se toma la posición del punto de una copia pública del dataset, solo si los dígitos coinciden al 100 % (ver `docs/p01_modelo_datos.md`) |
 | Separador `;` dentro de un campo | `"Imation Secure+ ... Flash Drive; 16GB"` (6 filas) | Tabla cruda con `OpenCSVSerde` y `quoteChar = '"'` |

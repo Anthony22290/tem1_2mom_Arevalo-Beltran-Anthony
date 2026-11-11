@@ -6,12 +6,15 @@ Determine la evolución de las ventas y ganancias por región durante los años 
 
 ## Estrategia de solución
 
-1. **CTE `region_anio`:** agrega ventas, ganancia y órdenes por `region` y `order_year`. Como la tabla está particionada por `order_year`, agrupar por la columna de partición no exige leer ni calcular la fecha.
-2. **CTE `con_lag`:** `LAG() OVER (PARTITION BY region ORDER BY anio)` trae el valor del año anterior **de la misma región**, para calcular la variación porcentual.
-3. **Margen:** `ganancia / ventas * 100`.
-4. **Variación de la ganancia:** se divide por `ABS(ganancia_anterior)` para que el signo indique bien la dirección si alguna ganancia anterior fuera negativa.
-5. **`RANK() OVER (PARTITION BY anio ...)`:** posición de cada región dentro de cada año.
-6. **Desempeño acumulado:** criterio principal la **ganancia acumulada 2014–2017** (lo que la región realmente aporta). Se complementa con el margen, la participación (`SUM() OVER ()` como total general) y el crecimiento anual compuesto de ventas (CAGR) usando `FIRST_VALUE` / `LAST_VALUE`.
+Dividí la consulta en pasos usando CTE (bloques `WITH`), que funcionan como tablas temporales dentro de la misma consulta:
+
+1. **`region_anio`:** sumo las ventas, la ganancia y las órdenes de cada región en cada año.
+2. **`con_lag`:** con `LAG()` traigo las ventas y la ganancia del año anterior **de la misma región**. `PARTITION BY region` hace que el cálculo se haga por separado en cada región.
+3. Calculo el **margen** como `ganancia / ventas × 100`, es decir, cuánto se gana por cada 100 dólares vendidos.
+4. Calculo la **variación** como `(año actual − año anterior) / año anterior × 100`.
+5. Con `RANK()` veo qué posición ocupa cada región en cada año.
+
+Para decidir cuál región tiene el **mejor y el peor desempeño** usé la **ganancia acumulada de 2014 a 2017**, porque es lo que realmente le queda a la empresa. También muestro el margen, el porcentaje que aporta cada región y cuánto crecieron las ventas por año en promedio (CAGR).
 
 ## Consulta HiveQL desarrollada
 
@@ -49,9 +52,9 @@ ORDER BY region, anio;
 
 ## Resultado obtenido
 
-### Evolución por región y año (USD)
+### Ventas y ganancias por región y año (USD)
 
-| Región | Año | Ventas | Ganancia | Margen % | Var. ventas % | Var. ganancia % | Rank ventas | Rank ganancia |
+| Región | Año | Ventas | Ganancia | Margen % | Var. ventas % | Var. ganancia % | Puesto ventas | Puesto ganancia |
 |--------|-----|-------:|---------:|---------:|--------------:|----------------:|:-:|:-:|
 | Central | 2014 | 103 838.16 | 539.55 | 0.52 | – | – | 4 | 4 |
 | Central | 2015 | 102 874.22 | 11 716.80 | 11.39 | −0.93 | 2 071.57 | 3 | 3 |
@@ -70,7 +73,9 @@ ORDER BY region, anio;
 | West | 2016 | 187 480.18 | 24 051.61 | 12.83 | 33.95 | 17.37 | 1 | 1 |
 | West | 2017 | 250 128.37 | 43 808.96 | 17.51 | 33.42 | 82.15 | 1 | 1 |
 
-### Mejor y peor región por año (según ganancia)
+En 2014 no hay variación porque no existe un año anterior para comparar.
+
+### Mejor y peor región de cada año (según la ganancia)
 
 | Año | Mejor región | Ganancia | Peor región | Ganancia |
 |-----|--------------|---------:|-------------|---------:|
@@ -79,16 +84,16 @@ ORDER BY region, anio;
 | 2016 | West | 24 051.61 | South | 17 702.81 |
 | 2017 | West | 43 808.96 | Central | 7 550.84 |
 
-### Desempeño acumulado 2014–2017
+### Total 2014–2017
 
-| Región | Ventas | Ganancia | Margen % | % de ventas | % de ganancia | CAGR ventas % | Clasificación |
-|--------|-------:|---------:|---------:|------------:|--------------:|--------------:|---------------|
+| Región | Ventas | Ganancia | Margen % | % de ventas | % de ganancia | Crecimiento anual de ventas % | Resultado |
+|--------|-------:|---------:|---------:|------------:|--------------:|------------------------------:|-----------|
 | West | 725 457.82 | 108 418.45 | 14.94 | 31.58 | 37.86 | 19.15 | **Mejor desempeño** |
 | East | 678 781.24 | 91 522.78 | 13.48 | 29.55 | 31.96 | 18.31 | – |
 | South | 391 721.91 | 46 749.43 | 11.93 | 17.05 | 16.32 | 5.78 | – |
 | Central | 501 239.89 | 39 706.36 | 7.92 | 21.82 | 13.86 | 12.31 | **Peor desempeño** |
 
-### Total de la empresa
+### Total de la empresa por año
 
 | Año | Ventas | Ganancia | Margen % | Var. ventas % | Var. ganancia % |
 |-----|-------:|---------:|---------:|--------------:|----------------:|
@@ -99,12 +104,13 @@ ORDER BY region, anio;
 
 ## Interpretación técnica
 
-- **West es la región con mejor desempeño** en todas las dimensiones: mayores ventas acumuladas, mayor ganancia (37.9 % del total con el 31.6 % de las ventas), mejor margen (14.9 %) y mayor crecimiento (19.2 % anual). En 2017 creció 33 % en ventas y 82 % en ganancia.
-- **East** sigue de cerca a West y tiene un comportamiento estable: crece en ventas todos los años y mantiene márgenes de 11 % a 16 %.
-- **Central es la de peor desempeño, aunque no es la que menos vende:** vende 28 % más que South, pero gana 15 % menos, porque su margen es el más bajo (7.9 %). Su ganancia es muy irregular: 0.5 % de margen en 2014, 13.5 % en 2016 y vuelve a caer a 5.1 % en 2017 con ventas prácticamente iguales al año anterior. Que la venta sea estable y la ganancia caiga indica un problema de rentabilidad (precios o descuentos) y no de volumen. Esto se analiza en la Pregunta 6.
-- **South** es la región más pequeña y la más volátil: cae 31 % en 2015, se recupera con su mejor margen (18.9 %) en 2016 y en 2017 vuelve a perder margen aunque las ventas suben 31 %.
-- **A nivel empresa** las ventas crecen 51 % entre 2014 y 2017, pero el margen se estanca en torno al 13 %. Las variaciones extremas, como +2 071 % en Central 2015, se explican por una base muy pequeña (539 USD en 2014), así que deben leerse junto al valor absoluto.
+- **West es la mejor región** en todo: es la que más vende, la que más gana (casi el 38 % de toda la ganancia), la que tiene mejor margen y la que más crece. En 2017 tuvo su mejor año, con un 82 % más de ganancia que en 2016.
+- **East** va segunda y es bastante estable: sus ventas suben todos los años.
+- **Central es la peor, aunque no es la que menos vende.** Vende más que South, pero gana menos porque su margen es muy bajo (7.9 %). Además su ganancia sube y baja mucho: en 2017 vendió casi lo mismo que en 2016, pero ganó 62 % menos. Si las ventas no cambian y la ganancia cae, el problema no es cuánto se vende sino a qué precio o con cuánto descuento. Esto lo reviso en la Pregunta 6.
+- **South** es la región más pequeña y la más irregular: un año cae mucho y al siguiente se recupera.
+- **En toda la empresa**, las ventas crecieron 51 % de 2014 a 2017, pero el margen se quedó en alrededor del 13 %. O sea, se vende más pero no se gana proporcionalmente más.
+- Algunas variaciones son muy grandes (como +2 071 % en Central 2015), pero es porque en 2014 la ganancia fue muy pequeña (539 USD). Por eso los porcentajes hay que mirarlos junto con los montos.
 
 ## Conclusión
 
-West es la región líder y la que más contribuye a la ganancia. Central es la de peor desempeño: tiene un volumen de ventas aceptable, pero la rentabilidad más baja y la más inestable. La empresa crece en ventas sin mejorar su margen, lo que sugiere revisar la política comercial de Central y South antes de seguir aumentando el volumen.
+West es la región que más aporta y la de mejor desempeño. Central es la de peor desempeño: vende bastante, pero gana poco y su ganancia es inestable. La empresa crece en ventas sin mejorar su margen, así que convendría revisar cómo se está vendiendo en Central y South.

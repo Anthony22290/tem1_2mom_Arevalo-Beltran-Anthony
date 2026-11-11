@@ -5,14 +5,14 @@ Procesamiento y análisis del dataset **Sample Superstore** con **Apache Hive (H
 
 ## Descripción
 
-Proyecto de ingeniería y análisis de datos sobre las ventas de una cadena minorista de EE. UU. (9 994 líneas de pedido, 2014–2017). Se diseña un modelo de almacenamiento en Hive, se audita y corrige la calidad del archivo fuente y se resuelven consultas analíticas con CTE y funciones de ventana para apoyar la toma de decisiones.
+En este proyecto trabajo con los datos de ventas de una tienda de EE. UU. (9 994 ventas entre 2014 y 2017). Primero cargo los datos en Hive, después reviso su calidad y corrijo los errores que encontré, y al final respondo preguntas de negocio con consultas HiveQL.
 
 ## Objetivos
 
-- Modelar e ingerir el dataset en Hive con tipos de datos apropiados.
-- Auditar la calidad e integridad del archivo y definir criterios de tratamiento.
-- Resolver consultas analíticas avanzadas (CTE, `LAG`, `RANK`, `DENSE_RANK`, `SUM() OVER`, `CUME_DIST`).
-- Interpretar los resultados y obtener conclusiones de negocio.
+- Crear las tablas en Hive con los tipos de datos correctos y cargar el dataset.
+- Revisar la calidad de los datos y decidir qué hacer con los errores.
+- Resolver las preguntas usando CTE y funciones de ventana (`LAG`, `RANK`, `DENSE_RANK`, `SUM() OVER`, `CUME_DIST`).
+- Explicar qué significan los resultados para el negocio.
 
 ## Requisitos
 
@@ -57,7 +57,7 @@ pip install pyspark==3.5.3
 for f in sql/p0*.sql; do python scripts/ejecutar_hiveql.py "$f"; done
 ```
 
-Los scripts deben ejecutarse en orden: `p01_ddl` → `p01_carga` → resto. Las preguntas 4 y 5 crean tablas auxiliares (`rfm_clientes`, `producto_metricas`, `producto_ranking`) y la 6 crea la vista `superstore_rango_desc`.
+Los scripts se ejecutan en orden: primero `p01_ddl`, después `p01_carga` y luego los demás. Las preguntas 4 y 5 crean tablas de apoyo (`rfm_clientes`, `producto_metricas`, `producto_ranking`) y la 6 crea la vista `superstore_rango_desc`.
 
 ## Modelo de datos
 
@@ -72,7 +72,7 @@ Base `superstore_db`:
 
 Diccionario completo: [`docs/diccionario_datos.md`](docs/diccionario_datos.md)
 
-> **Hallazgo importante:** el CSV del examen perdió el separador decimal en `Sales`, `Discount` y `Profit` (ej. `261.96` → `26196`, `0.45` → `45`). Se corrigió en la carga y se validaron las 9 994 filas. Detalle en [`docs/p01_modelo_datos.md`](docs/p01_modelo_datos.md).
+> **Algo importante:** el CSV del examen venía sin el punto decimal en `Sales`, `Discount` y `Profit` (por ejemplo, `261.96` aparecía como `26196` y `0.45` como `45`). Lo corregí al cargar los datos y comprobé las 9 994 filas. Lo explico en [`docs/p01_modelo_datos.md`](docs/p01_modelo_datos.md).
 
 ## Preguntas resueltas
 
@@ -87,11 +87,11 @@ Diccionario completo: [`docs/diccionario_datos.md`](docs/diccionario_datos.md)
 
 ## Resultados principales (preguntas 1 a 6)
 
-- Ventas totales de **2 297 200.86 USD** y ganancia de **286 397.02 USD** (margen 12.5 %) en 5 009 órdenes de 793 clientes.
-- **West** es la región de mejor desempeño (37.9 % de la ganancia); **Central** la peor (margen 7.9 %).
-- Los clientes **en riesgo de abandono** (16 %) concentran el 24 % de las ventas y la mayor ganancia de todos los segmentos RFM.
-- **Furniture** tiene un margen de solo 2.5 % y el 32 % de sus productos pierde dinero.
-- Todas las líneas con **descuento mayor al 50 %** pierden dinero; el margen se vuelve negativo a partir del **30 %** de descuento.
+- En total se vendieron **2 297 200.86 USD** y se ganaron **286 397.02 USD** (12.5 % de margen), en 5 009 órdenes de 793 clientes.
+- **West** es la mejor región (genera casi el 38 % de la ganancia) y **Central** la peor (solo 7.9 % de margen).
+- Los clientes **en riesgo de abandono** son el 16 % del total, pero hacen el 24 % de las ventas y son el grupo que más ganancia dejó.
+- **Furniture** gana muy poco (2.5 % de margen) y 1 de cada 3 de sus productos pierde dinero.
+- Todas las ventas con **más del 50 % de descuento** pierden dinero, y desde el **30 %** de descuento el margen ya es negativo.
 
 ## Uso de herramientas
 

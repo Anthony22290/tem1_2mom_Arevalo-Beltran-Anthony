@@ -6,15 +6,15 @@ Analice la relación entre los descuentos comerciales y la rentabilidad. Clasifi
 
 ## Estrategia de solución
 
-1. **Vista `superstore_rango_desc`:** agrega a cada línea su rango con un `CASE` (los límites son inclusivos a la derecha, como pide el enunciado: 0.20 es “bajo” y 0.50 es “medio”). La vista evita repetir el `CASE` en cada consulta.
-2. **Definiciones:**
-   - **Registro con pérdida:** `profit < 0`.
-   - **Registro no rentable:** `profit <= 0`, es decir, que no genera ganancia (incluye 30 líneas con ganancia exactamente 0).
-   - **Margen:** `SUM(profit) / SUM(sales)`, ponderado por venta y no como promedio de márgenes.
-3. **Indicadores por rango** con `GROUP BY rango_descuento`, y el porcentaje de registros con `SUM(COUNT(*)) OVER ()`.
-4. **Curva por nivel exacto de descuento** (0.10, 0.15, … 0.80) para ubicar el punto donde el margen se vuelve negativo.
-5. **Afectación por categoría y subcategoría:** se ordena con `RANK()` según el monto de pérdidas en líneas con descuento, y se compara el margen con y sin descuento.
-6. **Asociación:** correlación de Pearson (`CORR`) entre descuento y ganancia, y entre descuento y margen de la línea, además de comparar directamente el % no rentable entre rangos.
+1. **Asignar un rango a cada venta:** creé la vista `superstore_rango_desc` con un `CASE` que pone a cada registro en su rango. Lo hice como vista para no repetir el `CASE` en todas las consultas. Los límites incluyen el valor de la derecha, como dice el enunciado: 20 % es “bajo” y 50 % es “medio”.
+2. **Definiciones que usé:**
+   - **Registro con pérdida:** la ganancia es negativa (`profit < 0`).
+   - **Registro no rentable:** la ganancia es cero o negativa (`profit <= 0`), o sea, que no dejó ganancia. Incluye 30 ventas con ganancia exactamente 0.
+   - **Margen:** ganancia total dividida entre ventas totales del rango.
+3. **Indicadores por rango:** agrupé por rango y calculé ventas, ganancia, margen, registros con pérdida, % no rentable y descuento promedio.
+4. **Cada nivel de descuento por separado** (10 %, 15 %, 20 %, … 80 %), para ver en qué punto el margen se vuelve negativo.
+5. **Categorías y subcategorías más afectadas:** las ordené con `RANK()` según cuánto dinero pierden en las ventas con descuento, y comparé su margen con y sin descuento.
+6. **¿Hay relación?** Calculé la correlación (`CORR`), que va de −1 a 1 y mide si dos cosas se mueven juntas. Un valor cercano a −1 significa que cuando una sube, la otra baja. También comparé directamente el % no rentable entre los rangos.
 
 ## Consulta HiveQL desarrollada
 
@@ -51,7 +51,7 @@ ORDER BY rango_descuento;
 
 ## Resultado obtenido
 
-### Indicadores por rango de descuento
+### Resultados por rango de descuento
 
 | Rango | Registros | % reg. | Ventas | Ganancia | Margen % | Con pérdida | No rentables | % no rentables | Desc. prom. % |
 |-------|---------:|-------:|-------:|---------:|---------:|------------:|-------------:|---------------:|--------------:|
@@ -60,7 +60,7 @@ ORDER BY rango_descuento;
 | Medio (20–50 %] | 537 | 5.37 | 298 541.41 | −58 817.00 | −19.70 | 492 | 505 | 94.04 | 36.70 |
 | Alto (> 50 %) | 856 | 8.57 | 64 228.74 | −76 559.05 | **−119.20** | 856 | 856 | **100.00** | 71.89 |
 
-### Margen por nivel exacto de descuento
+### Margen en cada nivel de descuento
 
 | Descuento | Registros | Margen % | % no rentables |
 |----------:|----------:|---------:|---------------:|
@@ -77,21 +77,21 @@ ORDER BY rango_descuento;
 | 70 % | 418 | −98.66 | 100.00 |
 | 80 % | 300 | −180.03 | 100.00 |
 
-**Umbral de quiebre:** el primer nivel con margen negativo es **30 %**.
+**El margen se vuelve negativo a partir del 30 % de descuento.**
 
 ### Categorías más afectadas
 
-| Pos. | Categoría | Líneas con desc. | Desc. prom. % | Pérdidas en líneas con desc. | Margen sin desc. % | Margen con desc. % | % no rent. con desc. |
-|:---:|-----------|-----------------:|--------------:|-----------------------------:|-------------------:|-------------------:|---------------------:|
+| Puesto | Categoría | Ventas con desc. | Desc. prom. % | Pérdidas en ventas con desc. | Margen sin desc. % | Margen con desc. % | % no rentable con desc. |
+|:---:|-----------|-----------------:|--------------:|-----------------------------:|-------------------:|-------------------:|------------------------:|
 | 1 | Furniture | 1 285 | 28.71 | −60 936.11 | 22.71 | **−8.17** | 58.13 |
 | 2 | Office Supplies | 2 897 | 32.72 | −56 615.26 | 29.52 | −2.89 | 30.62 |
 | 3 | Technology | 1 014 | 24.10 | −38 579.92 | 33.96 | 2.94 | 26.82 |
 
-Por categoría y rango: Furniture ya pierde 28 % de sus líneas con descuento bajo y el 99.5 % con descuento medio. Office Supplies no tiene líneas en el rango medio: pasa directo del 20 % al 70–80 % (en *Binders*) y en el rango alto su margen es −119 %.
+Por categoría y rango: en Furniture, hasta con descuento bajo el 28 % de las ventas ya no es rentable, y con descuento medio no lo es el 99.5 %. Office Supplies no tiene ventas con descuento medio: pasa directamente del 20 % al 70–80 %.
 
-### Subcategorías más afectadas (top 10 por pérdidas en líneas con descuento)
+### Subcategorías más afectadas (top 10 por pérdidas en ventas con descuento)
 
-| Pos. | Categoría | Subcategoría | Desc. prom. % | % líneas con desc. > 20 % | Ganancia total | Margen % | Pérdidas con desc. | % no rentables |
+| Puesto | Categoría | Subcategoría | Desc. prom. % | % ventas con desc. > 20 % | Ganancia total | Margen % | Pérdidas con desc. | % no rentables |
 |:---:|-----------|--------------|--------------:|--------------------------:|---------------:|---------:|-------------------:|---------------:|
 | 1 | Office Supplies | Binders | 37.23 | 40.25 | 30 221.76 | 14.86 | −38 510.50 | 40.25 |
 | 2 | Furniture | **Tables** | 26.13 | 55.17 | **−17 725.48** | −8.56 | −32 412.15 | 64.26 |
@@ -104,29 +104,29 @@ Por categoría y rango: Furniture ya pierde 28 % de sus líneas con descuento ba
 | 9 | Office Supplies | Storage | 7.47 | 0.00 | 21 278.83 | 9.51 | −6 426.30 | 21.87 |
 | 10 | Office Supplies | **Supplies** | 7.68 | 0.00 | **−1 189.10** | −2.55 | −3 015.62 | 17.37 |
 
-Tres subcategorías tienen ganancia total negativa: **Tables (−17 725.48), Bookcases (−3 472.56) y Supplies (−1 189.10)**.
+Tres subcategorías terminaron con **pérdida total**: Tables (−17 725.48), Bookcases (−3 472.56) y Supplies (−1 189.10).
 
-### Asociación descuento – rentabilidad
+### ¿Hay relación entre descuento y rentabilidad?
 
 | Indicador | Valor |
 |-----------|------:|
-| Correlación descuento vs. ganancia de la línea | −0.2195 |
-| Correlación descuento vs. margen de la línea | **−0.8645** |
+| Correlación entre descuento y ganancia | −0.2195 |
+| Correlación entre descuento y margen de cada venta | **−0.8645** |
 | % no rentables con descuento alto (> 50 %) | **100.00 %** |
 | % no rentables sin descuento | 0.63 % |
-| % no rentables con descuento > 20 % | 97.70 % |
-| % no rentables con descuento ≤ 20 % | 6.69 % |
+| % no rentables con descuento mayor a 20 % | 97.70 % |
+| % no rentables con descuento de hasta 20 % | 6.69 % |
 
 ## Interpretación técnica
 
-- **El descuento destruye el margen de forma escalonada:** sin descuento el margen es de 29.5 %; con hasta 20 % baja a 11.9 %; entre 20 % y 50 % es −19.7 %, y por encima de 50 % es −119 %, es decir, se pierde más de lo que se vende.
-- **Hay un umbral claro en el 30 %:** hasta el 20 % de descuento la mayoría de las líneas siguen siendo rentables (86 %). Desde el 30 %, prácticamente ninguna lo es (97.7 %). El 20 % es el último nivel seguro.
-- **Los descuentos medio y alto son solo el 14 % de las líneas, pero borran el 33 % de la ganancia:** juntos pierden 135 376 USD, mientras que las líneas sin descuento ganan 320 988 USD.
-- **La correlación confirma la asociación:** contra la ganancia absoluta es débil (−0.22), porque la ganancia depende también del tamaño de la venta. Contra el **margen de cada línea es fuerte (−0.86)**: a mayor descuento, menor margen, casi de forma lineal.
-- **Por categoría, Furniture es la más afectada:** con descuento su margen pasa de +22.7 % a −8.2 %, y es la única que pierde en el agregado de líneas con descuento. *Tables* y *Bookcases* terminan con pérdida total aunque sin descuento son rentables.
-- **Binders es la subcategoría que más pierde por descuentos** (−38 510 USD): el 40 % de sus líneas se venden con 70–80 % de descuento. Aun así, la subcategoría es rentable en total gracias a sus ventas sin descuento.
-- Esto explica hallazgos anteriores: el bajo margen de la región Central (P3) y los productos con más pérdida (P5: impresoras 3D, mesas) coinciden con descuentos de 40 % a 80 %.
+- **Mientras más descuento, menos margen.** Sin descuento se gana casi 30 centavos por cada dólar vendido; con descuento bajo, 12 centavos; con descuento medio se pierden 20 centavos, y con descuento alto se pierde más de lo que se vende.
+- **El 20 % parece ser el límite.** Hasta el 20 % de descuento, la mayoría de las ventas todavía deja ganancia. Desde el 30 %, casi ninguna.
+- **Pocas ventas hacen mucho daño.** Las ventas con descuento medio y alto son solo el 14 % del total, pero juntas pierden 135 376 USD, que es como un tercio de la ganancia de la empresa.
+- **Sobre la correlación:** entre descuento y ganancia es débil (−0.22), porque la ganancia también depende de si la venta fue grande o pequeña. Pero entre descuento y margen es fuerte (−0.86). Esto confirma que, a más descuento, menos margen.
+- **Furniture es la categoría más afectada:** sin descuento gana 22.7 %, pero con descuento pierde 8.2 %. Tables y Bookcases terminan perdiendo dinero en total, aunque sin descuento sí son rentables.
+- **Binders es la subcategoría que más pierde por descuentos** (−38 510 USD), porque el 40 % de sus ventas se hicieron con 70–80 % de descuento. Aun así gana en total gracias a sus ventas sin descuento.
+- Esto conecta con lo que vi antes: el margen bajo de la región Central (Pregunta 3) y los productos que más pierden (Pregunta 5) tienen descuentos altos.
 
 ## Conclusión
 
-**Sí: los descuentos elevados están asociados a una mayor proporción de operaciones no rentables.** El 100 % de las líneas con descuento mayor a 50 % pierde dinero, frente al 0.63 % de las líneas sin descuento, y la correlación entre descuento y margen es de −0.86. La recomendación es poner un tope de descuento del 20 % (el último nivel con margen positivo) y revisar en especial *Tables*, *Bookcases*, *Binders* y *Machines*, donde se concentran las pérdidas.
+**Sí, los descuentos altos están relacionados con más ventas no rentables.** El 100 % de las ventas con más del 50 % de descuento perdió dinero, mientras que sin descuento solo el 0.63 % no fue rentable. Mi recomendación sería no dar descuentos de más del 20 % y revisar sobre todo Tables, Bookcases, Binders y Machines, que es donde más se pierde.
