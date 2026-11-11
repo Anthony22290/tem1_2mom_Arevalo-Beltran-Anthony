@@ -1,0 +1,270 @@
+EVIDENCIA DE EJECUCION
+Script : sql/p05_ranking_productos.sql
+Motor  : Spark SQL 3.5.3 con soporte Hive (HiveQL)
+Fecha  : 2026-11-11 11:22:20
+====================================================================================================
+
+-- [1] -- =====================================================================
+-- PREGUNTA 5 - Ranking de productos segun rentabilidad
+-- Tecnicas: RANK(), DENSE_RANK(), ROW_NUMBER() y SUM() OVER acumulado
+-- Producto = product_id + product_name (32 product_id tienen 2 nombres,
+-- ver Pregunta 2; asi no se mezclan articulos distintos)
+-- =====================================================================
+
+USE superstore_db
+OK - 0 fila(s) - 4.04 s
+
+-- [2] -- ---------------------------------------------------------------------
+-- 5.1 Metricas por producto (se materializan para las consultas)
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS producto_metricas
+OK - 0 fila(s) - 1.01 s
+
+-- [3] CREATE TABLE producto_metricas STORED AS ORC AS
+SELECT category,
+       sub_category,
+       product_id,
+       product_name,
+       COUNT(*)                         AS lineas,
+       SUM(quantity)                    AS unidades,
+       ROUND(SUM(sales), 2)             AS ventas,
+       ROUND(SUM(profit), 2)            AS ganancia,
+       ROUND(SUM(profit) / SUM(sales) * 100, 2) AS margen_pct,
+       ROUND(AVG(discount) * 100, 2)    AS descuento_prom_pct
+FROM superstore
+GROUP BY category, sub_category, product_id, product_name
+OK - 0 fila(s) - 3.99 s
+
+-- [4] SELECT COUNT(*)                         AS productos,
+       SUM(IF(ganancia < 0, 1, 0))      AS productos_con_perdida,
+       ROUND(SUM(IF(ganancia < 0, ganancia, 0)), 2) AS perdida_total
+FROM producto_metricas
++-----------+-----------------------+---------------+
+| productos | productos_con_perdida | perdida_total |
++-----------+-----------------------+---------------+
+| 1894      | 304                   | -77092.05     |
++-----------+-----------------------+---------------+
+OK - 1 fila(s) - 0.47 s
+
+-- [5] -- ---------------------------------------------------------------------
+-- 5.2 Top 5 productos con mayor ganancia acumulada POR CATEGORIA
+--     + posicion en la categoria (RANK y DENSE_RANK)
+--     + ganancia acumulada dentro de la categoria (SUM OVER)
+-- ---------------------------------------------------------------------
+WITH ranking AS (
+    SELECT category, product_id, product_name, ventas, ganancia, margen_pct,
+           RANK()       OVER (PARTITION BY category ORDER BY ganancia DESC) AS rank_cat,
+           DENSE_RANK() OVER (PARTITION BY category ORDER BY ganancia DESC) AS dense_rank_cat,
+           COUNT(*)     OVER (PARTITION BY category)                        AS productos_cat,
+           SUM(ganancia) OVER (PARTITION BY category ORDER BY ganancia DESC
+                               ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS ganancia_acumulada,
+           SUM(ganancia) OVER (PARTITION BY category)                       AS ganancia_cat
+    FROM producto_metricas
+)
+SELECT category, rank_cat, dense_rank_cat, productos_cat, product_id, product_name,
+       ventas, ganancia, margen_pct,
+       ROUND(ganancia_acumulada, 2)                         AS ganancia_acumulada,
+       ROUND(ganancia_acumulada / ganancia_cat * 100, 2)    AS pct_acum_categoria
+FROM ranking
+WHERE rank_cat <= 5
+ORDER BY category, rank_cat
++-----------------+----------+----------------+---------------+-----------------+--------------------------------------------------------------------------------------------+----------+----------+------------+--------------------+--------------------+
+| category        | rank_cat | dense_rank_cat | productos_cat | product_id      | product_name                                                                               | ventas   | ganancia | margen_pct | ganancia_acumulada | pct_acum_categoria |
++-----------------+----------+----------------+---------------+-----------------+--------------------------------------------------------------------------------------------+----------+----------+------------+--------------------+--------------------+
+| Furniture       | 1        | 1              | 383           | FUR-CH-10000454 | Hon Deluxe Fabric Upholstered Stacking Chairs, Rounded Back                                | 10637.53 | 1927.44  | 18.12      | 1927.44            | 10.45              |
+| Furniture       | 2        | 2              | 383           | FUR-CH-10004063 | Global Deluxe High-Back Manager's Chair                                                    | 8665.19  | 1558.59  | 17.99      | 3486.03            | 18.89              |
+| Furniture       | 3        | 3              | 383           | FUR-CH-10002320 | Hon Pagoda Stacking Chairs                                                                 | 6483.80  | 1540.70  | 23.76      | 5026.73            | 27.24              |
+| Furniture       | 4        | 4              | 383           | FUR-CH-10004086 | Hon 4070 Series Pagoda Armless Upholstered Stacking Chairs                                 | 8431.00  | 1388.63  | 16.47      | 6415.36            | 34.77              |
+| Furniture       | 5        | 5              | 383           | FUR-CH-10001854 | Office Star - Professional Matrix Back Chair with 2-to-1 Synchro Tilt and Mesh Fabric Seat | 8774.50  | 1305.65  | 14.88      | 7721.01            | 41.85              |
+| Office Supplies | 1        | 1              | 1098          | OFF-BI-10003527 | Fellowes PB500 Electric Punch Plastic Comb Binding Machine with Manual Bind                | 27453.38 | 7753.04  | 28.24      | 7753.04            | 6.33               |
+| Office Supplies | 2        | 2              | 1098          | OFF-BI-10001120 | Ibico EPK-21 Electric Binding System                                                       | 15875.92 | 3345.28  | 21.07      | 11098.32           | 9.06               |
+| Office Supplies | 3        | 3              | 1098          | OFF-AP-10002945 | Honeywell Enviracaire Portable HEPA Air Cleaner for 17' x 22' Room                         | 11304.44 | 3247.02  | 28.72      | 14345.34           | 11.71              |
+| Office Supplies | 4        | 4              | 1098          | OFF-BI-10003925 | Fellowes PB300 Plastic Comb Binding Machine                                                | 8070.19  | 2518.06  | 31.20      | 16863.40           | 13.77              |
+| Office Supplies | 5        | 5              | 1098          | OFF-BI-10004600 | Ibico Ibimaster 300 Manual Binding System                                                  | 7985.38  | 2318.34  | 29.03      | 19181.74           | 15.66              |
+| Technology      | 1        | 1              | 413           | TEC-CO-10004722 | Canon imageCLASS 2200 Advanced Copier                                                      | 61599.82 | 25199.93 | 40.91      | 25199.93           | 17.32              |
+| Technology      | 2        | 2              | 413           | TEC-CO-10001449 | Hewlett Packard LaserJet 3310 Copier                                                       | 18839.69 | 6983.88  | 37.07      | 32183.81           | 22.13              |
+| Technology      | 3        | 3              | 413           | TEC-CO-10003763 | Canon PC1060 Personal Laser Copier                                                         | 11619.83 | 4570.93  | 39.34      | 36754.74           | 25.27              |
+| Technology      | 4        | 4              | 413           | TEC-MA-10001127 | HP Designjet T520 Inkjet Large Format Printer - 24" Color                                  | 18374.90 | 4094.98  | 22.29      | 40849.72           | 28.08              |
+| Technology      | 5        | 5              | 413           | TEC-MA-10003979 | Ativa V4110MDD Micro-Cut Shredder                                                          | 7699.89  | 3772.95  | 49.00      | 44622.67           | 30.68              |
++-----------------+----------+----------------+---------------+-----------------+--------------------------------------------------------------------------------------------+----------+----------+------------+--------------------+--------------------+
+OK - 15 fila(s) - 1.21 s
+
+-- [6] -- ---------------------------------------------------------------------
+-- 5.3 Top 5 productos con mayor volumen de ventas (USD), con su
+--     ranking por unidades para comparar
+-- ---------------------------------------------------------------------
+WITH ranking AS (
+    SELECT category, product_id, product_name, unidades, ventas, ganancia, margen_pct,
+           RANK()       OVER (ORDER BY ventas DESC)   AS rank_ventas,
+           DENSE_RANK() OVER (ORDER BY unidades DESC) AS dense_rank_unidades,
+           SUM(ventas)  OVER (ORDER BY ventas DESC
+                              ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS ventas_acumuladas,
+           SUM(ventas)  OVER ()                       AS ventas_totales
+    FROM producto_metricas
+)
+SELECT rank_ventas, category, product_name, ventas, unidades, dense_rank_unidades,
+       ganancia, margen_pct,
+       ROUND(ventas_acumuladas / ventas_totales * 100, 2) AS pct_acum_ventas
+FROM ranking
+WHERE rank_ventas <= 5
+ORDER BY rank_ventas
++-------------+-----------------+-----------------------------------------------------------------------------+----------+----------+---------------------+----------+------------+-----------------+
+| rank_ventas | category        | product_name                                                                | ventas   | unidades | dense_rank_unidades | ganancia | margen_pct | pct_acum_ventas |
++-------------+-----------------+-----------------------------------------------------------------------------+----------+----------+---------------------+----------+------------+-----------------+
+| 1           | Technology      | Canon imageCLASS 2200 Advanced Copier                                       | 61599.82 | 20       | 41                  | 25199.93 | 40.91      | 2.68            |
+| 2           | Office Supplies | Fellowes PB500 Electric Punch Plastic Comb Binding Machine with Manual Bind | 27453.38 | 31       | 30                  | 7753.04  | 28.24      | 3.88            |
+| 3           | Technology      | Cisco TelePresence System EX90 Videoconferencing Unit                       | 22638.48 | 6        | 55                  | -1811.08 | -8.00      | 4.86            |
+| 4           | Furniture       | HON 5400 Series Task Chairs for Big and Tall                                | 21870.58 | 39       | 22                  | 0.00     | 0.00       | 5.81            |
+| 5           | Office Supplies | GBC DocuBind TL300 Electric Binding System                                  | 19823.48 | 37       | 24                  | 2233.51  | 11.27      | 6.68            |
++-------------+-----------------+-----------------------------------------------------------------------------+----------+----------+---------------------+----------+------------+-----------------+
+OK - 5 fila(s) - 0.46 s
+
+-- [7] -- Top 5 por unidades vendidas (DENSE_RANK por los empates)
+WITH ranking AS (
+    SELECT category, product_name, unidades, ventas, ganancia,
+           DENSE_RANK() OVER (ORDER BY unidades DESC) AS dense_rank_unidades,
+           RANK()       OVER (ORDER BY unidades DESC) AS rank_unidades
+    FROM producto_metricas
+)
+SELECT dense_rank_unidades, rank_unidades, category, product_name, unidades, ventas, ganancia
+FROM ranking
+WHERE dense_rank_unidades <= 5
+ORDER BY dense_rank_unidades, ventas DESC
++---------------------+---------------+-----------------+------------------------------------------------------------+----------+---------+----------+
+| dense_rank_unidades | rank_unidades | category        | product_name                                               | unidades | ventas  | ganancia |
++---------------------+---------------+-----------------+------------------------------------------------------------+----------+---------+----------+
+| 1                   | 1             | Office Supplies | GBC Premium Transparent Covers with Diagonal Lined Pattern | 67       | 780.46  | 49.51    |
+| 2                   | 2             | Furniture       | Situations Contoured Folding Chairs, 4/Set                 | 64       | 3641.27 | 234.23   |
+| 3                   | 3             | Furniture       | Chromcraft Round Conference Tables                         | 61       | 8209.06 | -189.98  |
+| 4                   | 4             | Furniture       | Global Wood Trimmed Manager's Task Chair, Khaki            | 59       | 4166.88 | -503.12  |
+| 4                   | 4             | Office Supplies | Wilson Jones Turn Tabs Binder Tool for Ring Binders        | 59       | 212.08  | 58.51    |
+| 5                   | 6             | Technology      | Kingston Digital DataTraveler 16GB USB 2.0                 | 57       | 477.93  | 64.71    |
++---------------------+---------------+-----------------+------------------------------------------------------------+----------+---------+----------+
+OK - 6 fila(s) - 0.36 s
+
+-- [8] -- ---------------------------------------------------------------------
+-- 5.4 Los 5 productos con menor rentabilidad (mayor perdida acumulada)
+-- ---------------------------------------------------------------------
+WITH ranking AS (
+    SELECT category, sub_category, product_id, product_name, ventas, ganancia,
+           margen_pct, descuento_prom_pct,
+           RANK() OVER (ORDER BY ganancia ASC)                          AS rank_peor,
+           RANK() OVER (PARTITION BY category ORDER BY ganancia DESC)   AS rank_cat,
+           COUNT(*) OVER (PARTITION BY category)                        AS productos_cat
+    FROM producto_metricas
+)
+SELECT rank_peor, category, sub_category, product_name, ventas, ganancia, margen_pct,
+       descuento_prom_pct, CONCAT(rank_cat, ' de ', productos_cat) AS posicion_en_categoria
+FROM ranking
+WHERE rank_peor <= 5
+ORDER BY rank_peor
++-----------+------------+--------------+----------------------------------------------------------+----------+----------+------------+--------------------+-----------------------+
+| rank_peor | category   | sub_category | product_name                                             | ventas   | ganancia | margen_pct | descuento_prom_pct | posicion_en_categoria |
++-----------+------------+--------------+----------------------------------------------------------+----------+----------+------------+--------------------+-----------------------+
+| 1         | Technology | Machines     | Cubify CubeX 3D Printer Double Head Print                | 11099.96 | -8879.97 | -80.00     | 53.33              | 413 de 413            |
+| 2         | Technology | Machines     | Lexmark MX611dhe Monochrome Laser Printer                | 16829.90 | -4589.97 | -27.27     | 40.00              | 412 de 413            |
+| 3         | Technology | Machines     | Cubify CubeX 3D Printer Triple Head Print                | 7999.98  | -3839.99 | -48.00     | 50.00              | 411 de 413            |
+| 4         | Furniture  | Tables       | Chromcraft Bull-Nose Wood Oval Conference Tables & Bases | 9917.64  | -2876.12 | -29.00     | 28.00              | 383 de 383            |
+| 5         | Furniture  | Tables       | Bush Advantage Collection Racetrack Conference Table     | 9544.73  | -1934.40 | -20.27     | 35.00              | 382 de 383            |
++-----------+------------+--------------+----------------------------------------------------------+----------+----------+------------+--------------------+-----------------------+
+OK - 5 fila(s) - 0.37 s
+
+-- [9] -- Los 5 con peor margen (%) entre productos con ventas relevantes (>= 1000 USD)
+WITH ranking AS (
+    SELECT category, product_name, ventas, ganancia, margen_pct, descuento_prom_pct,
+           RANK() OVER (ORDER BY margen_pct ASC) AS rank_margen
+    FROM producto_metricas
+    WHERE ventas >= 1000
+)
+SELECT rank_margen, category, product_name, ventas, ganancia, margen_pct, descuento_prom_pct
+FROM ranking
+WHERE rank_margen <= 5
+ORDER BY rank_margen
++-------------+------------+-------------------------------------------------------------------+----------+----------+------------+--------------------+
+| rank_margen | category   | product_name                                                      | ventas   | ganancia | margen_pct | descuento_prom_pct |
++-------------+------------+-------------------------------------------------------------------+----------+----------+------------+--------------------+
+| 1           | Technology | Epson TM-T88V Direct Thermal Printer - Monochrome - Desktop       | 1212.71  | -1057.23 | -87.18     | 55.00              |
+| 2           | Technology | Cubify CubeX 3D Printer Double Head Print                         | 11099.96 | -8879.97 | -80.00     | 53.33              |
+| 3           | Furniture  | BoxOffice By Design Rectangular and Half-Moon Meeting Room Tables | 1706.25  | -1148.44 | -67.31     | 48.33              |
+| 4           | Furniture  | Bevis Rectangular Conference Tables                               | 1007.26  | -586.84  | -58.26     | 47.50              |
+| 5           | Technology | Cubify CubeX 3D Printer Triple Head Print                         | 7999.98  | -3839.99 | -48.00     | 50.00              |
++-------------+------------+-------------------------------------------------------------------+----------+----------+------------+--------------------+
+OK - 5 fila(s) - 0.35 s
+
+-- [10] -- ---------------------------------------------------------------------
+-- 5.5 Margen y posicion de CADA producto dentro de su categoria
+--     Se guarda el ranking completo (1 894 productos) en una tabla y se
+--     muestran los 3 mejores y los 3 peores de cada categoria.
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS producto_ranking
+OK - 0 fila(s) - 0.02 s
+
+-- [11] CREATE TABLE producto_ranking STORED AS ORC AS
+SELECT category, sub_category, product_id, product_name, unidades, ventas, ganancia, margen_pct,
+       RANK()       OVER (PARTITION BY category ORDER BY ganancia DESC)   AS rank_ganancia,
+       DENSE_RANK() OVER (PARTITION BY category ORDER BY margen_pct DESC) AS dense_rank_margen,
+       COUNT(*)     OVER (PARTITION BY category)                          AS productos_cat,
+       ROUND(PERCENT_RANK() OVER (PARTITION BY category ORDER BY ganancia DESC) * 100, 1) AS percentil,
+       ROUND(SUM(ganancia) OVER (PARTITION BY category ORDER BY ganancia DESC
+                                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW), 2) AS ganancia_acumulada
+FROM producto_metricas
+OK - 0 fila(s) - 0.71 s
+
+-- [12] SELECT COUNT(*) AS productos_rankeados FROM producto_ranking
++---------------------+
+| productos_rankeados |
++---------------------+
+| 1894                |
++---------------------+
+OK - 1 fila(s) - 0.18 s
+
+-- [13] SELECT category, rank_ganancia, dense_rank_margen, productos_cat, percentil,
+       product_name, ventas, ganancia, margen_pct, ganancia_acumulada
+FROM producto_ranking
+WHERE rank_ganancia <= 3 OR rank_ganancia > productos_cat - 3
+ORDER BY category, rank_ganancia
++-----------------+---------------+-------------------+---------------+-----------+-----------------------------------------------------------------------------+----------+----------+------------+--------------------+
+| category        | rank_ganancia | dense_rank_margen | productos_cat | percentil | product_name                                                                | ventas   | ganancia | margen_pct | ganancia_acumulada |
++-----------------+---------------+-------------------+---------------+-----------+-----------------------------------------------------------------------------+----------+----------+------------+--------------------+
+| Furniture       | 1             | 111               | 383           | 0.0       | Hon Deluxe Fabric Upholstered Stacking Chairs, Rounded Back                 | 10637.53 | 1927.44  | 18.12      | 1927.44            |
+| Furniture       | 2             | 112               | 383           | 0.3       | Global Deluxe High-Back Manager's Chair                                     | 8665.19  | 1558.59  | 17.99      | 3486.03            |
+| Furniture       | 3             | 89                | 383           | 0.5       | Hon Pagoda Stacking Chairs                                                  | 6483.80  | 1540.70  | 23.76      | 5026.73            |
+| Furniture       | 381           | 322               | 383           | 99.5      | Balt Solid Wood Round Tables                                                | 6518.75  | -1201.06 | -18.42     | 23261.79           |
+| Furniture       | 382           | 325               | 383           | 99.7      | Bush Advantage Collection Racetrack Conference Table                        | 9544.73  | -1934.40 | -20.27     | 21327.39           |
+| Furniture       | 383           | 343               | 383           | 100.0     | Chromcraft Bull-Nose Wood Oval Conference Tables & Bases                    | 9917.64  | -2876.12 | -29.00     | 18451.27           |
+| Office Supplies | 1             | 343               | 1098          | 0.0       | Fellowes PB500 Electric Punch Plastic Comb Binding Machine with Manual Bind | 27453.38 | 7753.04  | 28.24      | 7753.04            |
+| Office Supplies | 2             | 459               | 1098          | 0.1       | Ibico EPK-21 Electric Binding System                                        | 15875.92 | 3345.28  | 21.07      | 11098.32           |
+| Office Supplies | 3             | 339               | 1098          | 0.2       | Honeywell Enviracaire Portable HEPA Air Cleaner for 17' x 22' Room          | 11304.44 | 3247.02  | 28.72      | 14345.34           |
+| Office Supplies | 1096          | 757               | 1098          | 99.8      | 3.6 Cubic Foot Counter Height Office Refrigerator                           | 2946.20  | -872.08  | -29.60     | 125668.24          |
+| Office Supplies | 1097          | 707               | 1098          | 99.9      | Martin Yale Chadless Opener Electric Letter Opener                          | 16656.20 | -1299.18 | -7.80      | 124369.06          |
+| Office Supplies | 1098          | 723               | 1098          | 100.0     | GBC DocuBind P400 Electric Binding System                                   | 17965.07 | -1878.17 | -10.45     | 122490.89          |
+| Technology      | 1             | 19                | 413           | 0.0       | Canon imageCLASS 2200 Advanced Copier                                       | 61599.82 | 25199.93 | 40.91      | 25199.93           |
+| Technology      | 2             | 40                | 413           | 0.2       | Hewlett Packard LaserJet 3310 Copier                                        | 18839.69 | 6983.88  | 37.07      | 32183.81           |
+| Technology      | 3             | 27                | 413           | 0.5       | Canon PC1060 Personal Laser Copier                                          | 11619.83 | 4570.93  | 39.34      | 36754.74           |
+| Technology      | 411           | 330               | 413           | 99.5      | Cubify CubeX 3D Printer Triple Head Print                                   | 7999.98  | -3839.99 | -48.00     | 158925.01          |
+| Technology      | 412           | 327               | 413           | 99.8      | Lexmark MX611dhe Monochrome Laser Printer                                   | 16829.90 | -4589.97 | -27.27     | 154335.04          |
+| Technology      | 413           | 334               | 413           | 100.0     | Cubify CubeX 3D Printer Double Head Print                                   | 11099.96 | -8879.97 | -80.00     | 145455.07          |
++-----------------+---------------+-------------------+---------------+-----------+-----------------------------------------------------------------------------+----------+----------+------------+--------------------+
+OK - 18 fila(s) - 0.29 s
+
+-- [14] -- ---------------------------------------------------------------------
+-- 5.6 Resumen por categoria
+-- ---------------------------------------------------------------------
+SELECT category,
+       COUNT(*)                                          AS productos,
+       ROUND(SUM(ventas), 2)                             AS ventas,
+       ROUND(SUM(ganancia), 2)                           AS ganancia,
+       ROUND(SUM(ganancia) / SUM(ventas) * 100, 2)       AS margen_pct,
+       SUM(IF(ganancia < 0, 1, 0))                       AS productos_con_perdida,
+       ROUND(SUM(IF(ganancia < 0, 1, 0)) * 100.0 / COUNT(*), 2) AS pct_con_perdida
+FROM producto_metricas
+GROUP BY category
+ORDER BY ganancia DESC
++-----------------+-----------+-----------+-----------+------------+-----------------------+-----------------+
+| category        | productos | ventas    | ganancia  | margen_pct | productos_con_perdida | pct_con_perdida |
++-----------------+-----------+-----------+-----------+------------+-----------------------+-----------------+
+| Technology      | 413       | 836154.02 | 145455.07 | 17.40      | 57                    | 13.80           |
+| Office Supplies | 1098      | 719047.08 | 122490.89 | 17.04      | 124                   | 11.29           |
+| Furniture       | 383       | 741999.86 | 18451.27  | 2.49       | 123                   | 32.11           |
++-----------------+-----------+-----------+-----------+------------+-----------------------+-----------------+
+OK - 3 fila(s) - 0.62 s
